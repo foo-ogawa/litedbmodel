@@ -63,8 +63,6 @@
     "tracked:check": "node scripts/check-tracked-files.mjs",
     "spec:check": "node scripts/check-spec-refs.mjs",
     "docs:bench:check": "node scripts/check-bench-docs.mjs",
-    "vendor:bc-php": "node scripts/vendor-behavior-contracts-php.mjs",
-    "vendor:bc-php:check": "node scripts/vendor-behavior-contracts-php.mjs --check",
     "go:dispatch:check": "LITEDBMODEL_LIVEDB_VECTORS=\"$PWD/conformance/vectors-livedb/livedb.json\" sh -c 'cd go && exec go run ./conformance/livedb --check-coverage'",
     "rust:dispatch:check": "LITEDBMODEL_LIVEDB_VECTORS=\"$PWD/conformance/vectors-livedb/livedb.json\" sh -c 'cd rust && exec cargo run --quiet -p livedb_runner --features livedb -- --check-coverage'",
     "conformance:dispatch:check": "npm run go:dispatch:check && npm run rust:dispatch:check",

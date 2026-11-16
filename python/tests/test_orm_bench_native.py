@@ -1,10 +1,10 @@
-"""ORM-bench native (ir-exec) conformance (#141 / epic #123, python leg) — ALL 19 ops.
+"""ORM-bench native conformance (#141 / epic #123, python leg) — ALL 19 ops.
 
 Proves the litedbmodel python runtime runs the full covered surface (reads, single writes, batch
-writes, RETURNING-chained transactions) through the bc-GENERATED ir-exec module
-(``orm_bench.behaviors_generated``, verbatim ``bc generate --lang python``) bound to the op-agnostic
-leaf transport (``make_handlers``) — the python literal path (ts/go/rust = native de-box; py/php =
-literal). Pins: every op executes; batched relations are N+1-free; batch writes are ONE statement; the
+writes, RETURNING-chained transactions) through the bc-GENERATED native module
+(``orm_bench.behaviors_sqlite``, verbatim ``bc generate --lang python-native``), whose entries call the
+op-agnostic leaf transports directly inside the binding the caller opens (``with_leaf_transport``).
+Pins: every op executes; batched relations are N+1-free; batch writes are ONE statement; the
 RETURNING-chained transactions run through the runtime tx boundary (BEGIN + 2 body + COMMIT = 4
 statements) and are ATOMIC (a mid-tx error commits nothing). Schema/seed/harness/safety-counter are
 imported from the bench cell (``orm_bench.main``) — the SAME fixture the CSV cell measures (no
@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from litedbmodel_runtime import as_context, with_transaction
+from litedbmodel_runtime import as_context, with_leaf_transport, with_transaction
 from orm_bench.main import (
     BATCH_QUERY_COUNTS,
     OPS,
@@ -143,8 +143,11 @@ def test_tx_atomicity_rolls_back_on_error(harness):
     class _Boom(RuntimeError):
         pass
 
+    create = fns.entries["create"]
+
     def body(_tx_ctx):
-        fns["create"]({"email": "rollback@bench.com", "name": "RB"})  # insert on the pinned tx conn
+        # insert on the pinned tx conn
+        with_leaf_transport(fns.ctx, "sqlite", lambda: create(email="rollback@bench.com", name="RB"))
         raise _Boom()  # mid-tx failure → ROLLBACK
 
     with pytest.raises(_Boom):
@@ -155,7 +158,10 @@ def test_tx_atomicity_rolls_back_on_error(harness):
     assert not any(r["email"] == "rollback@bench.com" for r in after)  # the insert was rolled back
 
     # COMMIT path (control): the same op through the boundary DOES persist.
-    with_transaction(as_context(driver), lambda _c: fns["create"]({"email": "committed@bench.com", "name": "OK"}))
+    with_transaction(
+        as_context(driver),
+        lambda _c: with_leaf_transport(fns.ctx, "sqlite", lambda: create(email="committed@bench.com", name="OK")),
+    )
     assert any(r["email"] == "committed@bench.com" for r in _users(driver))
 
 

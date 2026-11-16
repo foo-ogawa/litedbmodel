@@ -49,7 +49,6 @@ from litedbmodel_runtime import (
     with_middleware_scope,
 )
 from litedbmodel_runtime.exec_context import current_context
-from litedbmodel_runtime.leaves import make_handlers
 
 
 def _fresh_db() -> sqlite3.Connection:
@@ -470,16 +469,15 @@ def test_middleware_observes_relation_batch_sql_end_to_end(relation_through_leav
 
     A generated module reaches a relation through the three leaves only, so the parent read and the
     batched child fetch are two ``executeSQL`` calls — each crossing the central seam over the ctx the
-    handlers were built with, which is what makes them middleware-visible."""
+    transport is bound to (``with_leaf_transport``), which is what makes them middleware-visible."""
     conn = _rel_db()
     seen = []
     result = {}
 
     def scope():
         use(create_middleware(execute=lambda st, nxt, sql, params: (seen.append(sql), nxt(sql, params))[1]))
-        handlers = make_handlers(SqliteDriver(conn), "sqlite")
         result["grouped"] = relation_through_leaves(
-            handlers, _REL_PARENT_SQL, _REL_CHILD_SQL, "id", "parent_id", "kids"
+            SqliteDriver(conn), "sqlite", _REL_PARENT_SQL, _REL_CHILD_SQL, "id", "parent_id", "kids"
         )
 
     with_middleware_scope(scope)
@@ -496,8 +494,9 @@ def test_red_relation_batch_not_observed_without_registration(relation_through_l
     conn = _rel_db()
     seen = []
     # No middleware registered → both statements run as a byte-identical passthrough.
-    handlers = make_handlers(SqliteDriver(conn), "sqlite")
-    grouped = relation_through_leaves(handlers, _REL_PARENT_SQL, _REL_CHILD_SQL, "id", "parent_id", "kids")
+    grouped = relation_through_leaves(
+        SqliteDriver(conn), "sqlite", _REL_PARENT_SQL, _REL_CHILD_SQL, "id", "parent_id", "kids"
+    )
     # The read still WORKS (byte-identical) — the relation loaded — but nothing was observed.
     assert len(grouped[0]["kids"]) == 2
     assert not any("from child" in s.lower() for s in seen)

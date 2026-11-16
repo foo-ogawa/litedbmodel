@@ -1,14 +1,14 @@
 """NATIVE-codegen ORM-bench cell (python leg, epic #123) — self-measure the covered ORM ops through
-the litedbmodel-GENERATED ir-exec module (``behaviors_generated.py``, verbatim ``bc generate --lang
-python``) + ``litedbmodel_runtime``'s op-agnostic leaf transport, and print a flat CSV
-(``cell,dialect,op,iter,us``) the TS collector aggregates.
+the litedbmodel-GENERATED native module (``behaviors_<dialect>.py``, verbatim ``bc generate --lang
+python-native``), which calls ``litedbmodel_runtime``'s op-agnostic leaf transports directly, and print a
+flat CSV (``cell,dialect,op,iter,us``) the TS collector aggregates.
 
-This cell is a litedbmodel-CONSUMER: it binds the leaf transport (``make_handlers`` →
-``executeSQL``/``pluck``/``group``) into the generated module's ``bind(handlers)`` (boundary injection
-— the python literal/ir-exec path, epic #123: ts/go/rust = native de-box; py/php = literal) and calls
-the resulting per-op callables. It holds NO hand-written exec seam and NO hand-written BEGIN/COMMIT:
+This cell is a litedbmodel-CONSUMER: it binds the leaf transport to the target's execution context
+(``with_leaf_transport``) around each call and calls the generated entry of the op (the authored method,
+snake_case) with the op's input as its keyword arguments. It holds NO hand-written exec seam and NO
+hand-written BEGIN/COMMIT:
 
-  - reads/single-writes/batches run the bound op callable directly; the leaf funnels every DB access
+  - reads/single-writes/batches call the generated entry directly; the leaf funnels every DB access
     through the runtime central execute/run seam. Relations are N+1-free: ``parents → pluck →
     executeSQL(WHERE fk IN …) → group`` = 1 batched child query per level (nestedFindAll=2,
     nestedRelations=3, composite=3). Batch writes are ONE ``json_each``/``JSON_TABLE`` statement.
@@ -24,9 +24,11 @@ Usage: ``python -m orm_bench.main <dialect> [reps] [warmup]`` or
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Callable, Dict, List
 
@@ -42,8 +44,8 @@ from litedbmodel_runtime import (
     as_context,
     clear_middlewares,
     create_middleware,
-    make_handlers,
     register_middleware,
+    with_leaf_transport,
     with_transaction,
 )
 
@@ -143,22 +145,36 @@ def seed(driver: Any, dialect: str = "sqlite") -> None:
         driver.prepare(stmt).run([])
 
 
-def bound_ops(driver: Any, dialect: str) -> Dict[str, Callable[..., Any]]:
-    """Bind the op-agnostic leaf transport into the generated module of THIS dialect."""
+@dataclass(frozen=True)
+class BoundOps:
+    """The generated entries of THIS dialect's module (op name → entry) and the execution context the leaf
+    transport is bound to around each call."""
+
+    ctx: Any
+    dialect: str
+    entries: Dict[str, Callable[..., Any]]
+
+
+def bound_ops(driver: Any, dialect: str) -> BoundOps:
+    """The generated entry of every op in THIS dialect's module — python-native names an entry after the
+    authored method in snake_case."""
     module = _GENERATED.get(dialect)
     if module is None:
         raise SystemExit(f"orm_bench: no generated module for dialect {dialect!r} (sqlite|postgres|mysql)")
-    return module.bind(make_handlers(driver, dialect))
+    entries = {op: getattr(module, re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", op).lower()) for op in OPS}
+    return BoundOps(as_context(driver), dialect, entries)
 
 
-def run_op(fns: Dict[str, Callable[..., Any]], driver: Any, dialect: str, op: str, it: int) -> Any:
-    """Run ONE covered op through its generated callable. A RETURNING-chained tx op runs THROUGH the
-    runtime tx boundary (with_transaction over the driver ctx) so BEGIN/COMMIT bracket the leaf's body
-    statements on the tx-owned connection; every other op runs the bound callable directly."""
+def run_op(fns: BoundOps, driver: Any, dialect: str, op: str, it: int) -> Any:
+    """Run ONE covered op through its generated entry, with the leaf transport bound to the target's
+    execution context. A RETURNING-chained tx op runs THROUGH the runtime tx boundary (with_transaction over
+    that ctx) so BEGIN/COMMIT bracket the leaf's body statements on the tx-owned connection; every other op
+    calls the entry directly."""
     inp = op_input(dialect, op, it)
+    entry = fns.entries[op]
     if op in TX_OPS:
-        return with_transaction(as_context(driver), lambda _tx_ctx: fns[op](inp))
-    return fns[op](inp)
+        return with_leaf_transport(fns.ctx, dialect, lambda: with_transaction(fns.ctx, lambda _tx_ctx: entry(**inp)))
+    return with_leaf_transport(fns.ctx, dialect, lambda: entry(**inp))
 
 
 def _measure(dialect: str, reps: int, warmup: int) -> None:
@@ -209,7 +225,7 @@ def _counters() -> Any:
         clear_middlewares()
 
 
-def probe(driver: Any, fns: Dict[str, Callable[..., Any]], dialect: str, op: str) -> Dict[str, int]:
+def probe(driver: Any, fns: BoundOps, dialect: str, op: str) -> Dict[str, int]:
     """Run ONE op once off the timed seam and report its ``{stmts, rows}`` — the safety assertion's input
     and the report's per-row denominator, measured in one place."""
     seed(driver, dialect)  # clean fixture; not counted (runs off-seam)

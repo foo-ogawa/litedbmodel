@@ -10,7 +10,8 @@ comes up again, the answer is here (verified, grounded), not re-derived.
 
 - **declare-via-BC → bc typed-native codegen.** litedbmodel declares read/relation/write
   behaviors; `bc generateModule({language:'rust-typed-native' | 'go-typed-native'})` emits
-  the typed native module. py/php are **literal** (ir-exec over the native record).
+  the typed native module. py/php use `python-native` / `php-native` (the same direct transport
+  calls, no IR).
 - **ONE op-agnostic transport that touches the DB:** `execute_sql(sql, params)`. The fk IN-clause
   is embedded in the **generated SQL**; `params` = the deduped keys. Nothing else does I/O.
 - **pluck / group are op-agnostic WIRE leaves** (`pluck_keys`, `group_children`) — NOT the DB

@@ -10,8 +10,8 @@
  *
  * ## The legs
  *
- *   - `py`   — `python/conformance/livedb_runner.py`          (bc `--lang python`)
- *   - `php`  — `php/conformance/livedb_runner.php`            (bc `--lang php`)
+ *   - `py`   — `python/conformance/livedb_runner.py`          (bc `--lang python-native`)
+ *   - `php`  — `php/conformance/livedb_runner.php`            (bc `--lang php-native`)
  *   - `go`   — `go/conformance/livedb/livedb_runner.go`       (bc `--lang go-typed-native`)
  *   - `rust` — `rust/livedb_runner` crate                     (bc `--lang rust-typed-native`)
  *
@@ -34,7 +34,7 @@
  * a silent skip). This orchestrator fails if ANY leg is not all-pass, or any leg is unrunnable.
  *
  * The Python venv / driver install is environment-specific; set LIVEDB_PY to point at the Python
- * interpreter that has psycopg + pymysql + behavior_contracts (defaults to `python3`).
+ * interpreter that has psycopg + pymysql + litedbmodel_runtime (defaults to `python3`).
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';

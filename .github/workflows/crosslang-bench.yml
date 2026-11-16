@@ -7,7 +7,7 @@ name: Cross-lang codegen gates (#107 / #113)
 #   • purity (#113) — the committed native/typed modules are what their tier claims: rust compiles
 #                     standalone with NO behavior_contracts extern, go's transitive deps carry no
 #                     bc-runtime / encoding/json, ts imports only bc VALUE helpers (baked straight-line).
-#                     py/php are the ir (interpreter) tier — labeled, not native-gated.
+#                     py/php (python-native / php-native) are not part of this gate.
 
 on:
   pull_request:

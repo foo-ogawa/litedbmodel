@@ -5,6 +5,32 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.3.0] - 2026-11-16
+
+**python / php の生成モジュールを native のコードに切り替えた。** 生成モジュールは behavior-contracts の
+`python-native` / `php-native` の出力で、IR を持たず、リーフ転送を直接呼ぶ。python / php の runtime は
+behavior-contracts に依存しない。behavior-contracts を 0.12.0 に更新した（5言語）。Closes #387。
+
+### Changed
+
+- python / php の conformance・ORM ベンチの生成モジュールを `--lang python-native` / `--lang php-native` で生成する。
+  実行時に IR を解釈しない。
+- python のリーフ転送は `litedbmodel_runtime.leaves` の `execute_sql` / `pluck_keys` / `group_children`、php は
+  `Leaves::executeSQL` / `Leaves::pluckKeys` / `Leaves::groupChildren` になった。実行コンテキストは呼び出しを
+  `with_leaf_transport(conn_or_ctx, dialect, fn)` / `Leaves::withTransport($pdoOrCtx, $dialect, $fn)` で囲んで束縛する。
+  python の束縛は `ContextVar` で、並列 stage の worker にも引き継がれる。
+- リーフの失敗（`SqlFailure`・`LimitExceededError`）は例外として送出し、生成モジュールが `OP_FAILED` の
+  `BehaviorError` に包む（元の例外を cause / previous に保持する）。
+- python のエントリは snake_case の関数名になった（引数は authored の名前のまま）。php のエントリは生成ファイルの
+  `require` が返すオブジェクトの static メソッドになった。
+
+### Removed
+
+- python / php のリーフの handler 契約（`make_handlers` / `Leaves::makeHandlers`、`{"ok"|"error"}` の戻り値）。
+- python の `behavior-contracts` への依存（`pyproject.toml`）。
+- php の vendored な behavior-contracts（`php/src/BehaviorContracts/`）と、その同期スクリプト
+  （`scripts/vendor-behavior-contracts-php.mjs`、`npm run vendor:bc-php` / `vendor:bc-php:check`）。
+
 ## [2.2.15] - 2026-11-13
 
 **依存とセキュリティの更新、および全言語のセキュリティ監査で確認した欠陥の修正。** MySQL の RETURNING の emulation、

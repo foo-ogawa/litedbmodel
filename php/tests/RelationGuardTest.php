@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace LiteDbModel\Runtime\Tests;
 
-use LiteDbModel\Runtime\Leaves;
 use LiteDbModel\Runtime\LimitExceededError;
 use PHPUnit\Framework\TestCase;
 
@@ -19,6 +18,8 @@ use PHPUnit\Framework\TestCase;
  */
 final class RelationGuardTest extends TestCase
 {
+    use RelationThroughLeavesTrait;
+
     /** @var callable */
     private $executeSQL;
 
@@ -27,7 +28,7 @@ final class RelationGuardTest extends TestCase
         $pdo = new \PDO('sqlite::memory:', null, null, [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
         $pdo->exec('CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)');
         $pdo->exec("INSERT INTO t (id, v) VALUES (1,'a'), (2,'b'), (3,'c')");
-        $this->executeSQL = Leaves::makeHandlers($pdo, 'sqlite')['executeSQL'];
+        $this->executeSQL = self::boundLeaves($pdo, 'sqlite')['executeSQL'];
     }
 
     /**
@@ -44,7 +45,7 @@ final class RelationGuardTest extends TestCase
         if ($guard !== null) {
             $ports['opts'] = (object) ['db' => null, 'write' => null, 'whereDynamic' => null, 'guard' => $guard];
         }
-        return ($this->executeSQL)($ports, ['nodeId' => 'n0', 'component' => 'executeSQL']);
+        return ($this->executeSQL)($ports);
     }
 
     private static function cap(int $limit): \stdClass
@@ -54,8 +55,7 @@ final class RelationGuardTest extends TestCase
 
     public function testOverTheCapThrowsWithTheExactBatchCount(): void
     {
-        // A runaway is a typed litedbmodel policy error, not a mapped transport failure, so it THROWS
-        // rather than returning `['error' => …]` (the TS leaf throws the same class).
+        // A runaway is a typed litedbmodel policy error: the leaf THROWS it (the TS leaf throws the same class).
         try {
             $this->read(self::cap(2));
             self::fail('a relation batch over its cap must throw');
@@ -74,12 +74,12 @@ final class RelationGuardTest extends TestCase
 
     public function testWithinTheCapReturnsTheRows(): void
     {
-        self::assertCount(3, $this->read(self::cap(3))['ok']);
+        self::assertCount(3, $this->read(self::cap(3)));
     }
 
     public function testAnUncappedStatementIsNeverChecked(): void
     {
         // No `guard` port at all — the byte-unchanged path every non-relation statement takes.
-        self::assertCount(3, $this->read(null)['ok']);
+        self::assertCount(3, $this->read(null));
     }
 }

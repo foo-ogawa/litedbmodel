@@ -1,59 +1,57 @@
 # litedbmodel/runtime (PHP)
 
-The PHP leg of the litedbmodel v2 SCP multi-language runtime. It is the shared runtime a
-`bc generate`d native module binds to: the leaf transport (`Leaves::makeHandlers` →
-`executeSQL`/`pluck`/`group`) wired to the central execute/run seam, connection routing, and the
-render-layer placeholder resolution — semantics-identical to the TS reference (`src/scp`).
+The PHP leg of the litedbmodel v2 SCP multi-language runtime. A `bc generate --lang php-native` module
+is plain PHP with no behavior-contracts runtime; it calls the three leaf transports this package
+provides — `Leaves::executeSQL` / `Leaves::pluckKeys` / `Leaves::groupChildren` — wired to the central
+execute/run seam, connection routing, transactions, and the render-layer placeholder resolution.
+Semantics-identical to the TS reference (`src/scp`).
 
-**Status: implemented (WS7d, #33).** There is no litedbmodel-owned bundle/read-graph/tx-plan
-execution (the self-built `SqlBundle`/`ReadGraph` surface was removed in #227): a BC-generated PHP
-module drives the closed-set orchestration and calls the leaf handlers by boundary injection. The
-runtime reproduces the frozen corpus byte-for-byte: same SQL across all three dialects, executed on
-real PDO SQLite + the live PG/MySQL cross-language pass (the SQL-handler seam takes any PDO
-connection).
+The generated module reproduces the frozen corpus byte-for-byte: same SQL across all three dialects,
+executed on real PDO SQLite and on the live PG/MySQL cross-language pass.
 
-## behavior-contracts dependency — VENDORED (not a registry dep)
+## Calling a generated module
 
-The behavior-contracts **PHP port is NOT published to Packagist** (owner decision, mirrored from
-graphddb — `foo-ogawa/behavior-contracts#7`). Like graphddb, this runtime therefore consumes it by
-**vendoring** a mechanical copy into `php/src/BehaviorContracts/` behind a sync script + a CI drift
-gate (`scripts/vendor-behavior-contracts-php.mjs`, mirroring graphddb's). This is NOT a local `../`
-path dependency — it is a committed, drift-checked vendored copy, so the `check-no-local-deps`
-gate is satisfied and the published artifact is self-contained.
-
-Re-vendor from the behavior-contracts SSoT and check for drift:
+The module is generated with the transports baked in:
 
 ```bash
-npm run vendor:bc-php          # (re)vendor from ../behavior-contracts/php/src
-npm run vendor:bc-php:check    # CI: fail on drift (never hand-edit src/BehaviorContracts/)
+bc generate --from <model>.ts --lang php-native \
+  --leaf-transport executeSQL=executeSQL pluck=pluckKeys group=groupChildren \
+  --leaf-transport-import 'LiteDbModel\Runtime\Leaves'
 ```
 
-The composer.json therefore declares **no** behavior-contracts requirement; the vendored classes
-autoload under the package's own PSR-4 root (`LiteDbModel\Runtime\` → `src/`, which covers
-`LiteDbModel\Runtime\BehaviorContracts\` → `src/BehaviorContracts/`).
+Its `require` returns an object whose public static methods are the authored entries. The execution
+context the statements run on is bound around the call with `Leaves::withTransport()`:
+
+```php
+$repo = require 'behaviors_postgres.php';
+$rows = Leaves::withTransport($pdoOrCtx, 'postgres', static fn () => $repo::findByEmail('a@b.c'));
+```
+
+`$pdoOrCtx` is a raw `\PDO` or an `ExecutionContext` (a routed context resolves its connection per
+statement). A statement failure surfaces as `\BehaviorContractsNative\BehaviorError` (`OP_FAILED`)
+with the `SqlFailure` / `LimitExceededError` as its previous exception.
+
+The package has no behavior-contracts dependency.
 
 ## Layout
 
 ```
 php/
-  composer.json                       # package litedbmodel/runtime (no bc dep — bc is vendored)
-  src/Leaves.php                      # the op-agnostic leaf transport (executeSQL/pluck/group) — the execution surface
+  composer.json                       # package litedbmodel/runtime
+  src/Leaves.php                      # the op-agnostic leaf transport (executeSQL/pluckKeys/groupChildren) + withTransport()
   src/ExecutionContext.php            # the ExecutionContext + central execute/run/runGuarded seam + transaction()
   src/Runtime.php                     # the in-source version mirror (scripts/sync-versions.mjs SSoT)
   src/StaticBundle.php                # the render-layer placeholder resolution (?→$N, PG array-cast)
   src/Dialect.php                     # dialect strategy (finalizePlaceholders / orderByNulls)
   src/SqlFailure.php                  # PDO error → SCP failure mapping (port of src/scp/errors.ts)
-  src/BehaviorContracts/              # vendored bc PHP port (drift-gated), NOT hand-edited
-  conformance/vectors_runner.php      # conformance runner entry (loads conformance/vectors/*.json)
+  conformance/behaviors_<dialect>.php # generated php-native modules for the live-DB corpus
+  conformance/livedb_runner.php       # the live-DB corpus runner
+  orm_bench/                          # the ORM-bench cell (generated modules + harness)
   tests/                              # phpunit runtime tests
 ```
 
 ## Running
 
 ```bash
-# Conformance vectors (real PDO SQLite; reproduces expected SQL + results):
-php php/conformance/vectors_runner.php
-
-# phpunit unit + integration tests:
 cd php && composer install && ./vendor/bin/phpunit
 ```

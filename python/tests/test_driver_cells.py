@@ -14,8 +14,8 @@ from decimal import Decimal
 
 import pytest
 
-from litedbmodel_runtime.driver import SqliteDriver, _conn_all
-from litedbmodel_runtime.leaves import make_handlers
+from litedbmodel_runtime.driver import _conn_all
+from litedbmodel_runtime.leaves import group_children, pluck_keys
 
 
 class _Cursor:
@@ -68,8 +68,7 @@ def test_adjacent_big_numeric_parents_keep_their_own_children() -> None:
     parents = _rows(
         _Conn((["id", "owner"], [(Decimal("9007199254740992"), "A"), (Decimal("9007199254740993"), "B")]))
     )
-    leaves = make_handlers(SqliteDriver.in_memory([]), "postgres")
-    keys = leaves["pluck"]({"rows": parents, "col": ["id"]}, {})["ok"]
+    keys = pluck_keys({"rows": parents, "col": ["id"]})
     assert keys == [9007199254740992, 9007199254740993]
 
     children = _rows(
@@ -80,10 +79,9 @@ def test_adjacent_big_numeric_parents_keep_their_own_children() -> None:
             )
         )
     )
-    grouped = leaves["group"](
-        {"parents": parents, "children": children, "pk": ["id"], "fk": ["account_id"], "into": "rows", "single": False},
-        {},
-    )["ok"]
+    grouped = group_children(
+        {"parents": parents, "children": children, "pk": ["id"], "fk": ["account_id"], "into": "rows", "single": False}
+    )
     assert [(g["owner"], [c["id"] for c in g["rows"]]) for g in grouped] == [("A", [1]), ("B", [2])]
 
 

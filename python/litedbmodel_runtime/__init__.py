@@ -1,13 +1,11 @@
-"""litedbmodel v2 SCP — Python runtime (WS7b, #31).
+"""litedbmodel v2 SCP — Python runtime.
 
-The Python leg of the multi-language SCP runtime. It interprets the language-neutral §8 published
-bundle (``SqlBundle``: sql text + fragment tree + closed-set Expression-IR param slots +
-transaction plan, dialect-tagged) and executes it against a SQL driver, semantics-identical to
-the TS reference (``src/scp``). The generic Expression-IR evaluation (SKIP guards, param slots)
-and the plan/map/wire/output orchestration are delegated to the shared common core
-``behavior-contracts`` (PyPI) — this package re-implements NO generic evaluator, only the
-SQL-backend concerns (render → bind → execute → assembly + gate-first transaction), exactly like
-the TS runtime.
+The Python leg of the multi-language SCP runtime: the SQL-backend concerns a bc ``python-native`` module
+needs at run time — the op-agnostic leaf transports it calls (``execute_sql`` / ``pluck_keys`` /
+``group_children``), the execution context they run on (connection routing, middleware, transactions),
+the drivers, the relation grouping and the render-layer placeholder resolution. The generated module
+carries the execution plan, the expressions and the de-box itself; it imports this package for the
+transports only, and nothing here evaluates an IR.
 """
 
 from __future__ import annotations
@@ -102,7 +100,7 @@ from .connection_routing import (
     single_pool_pair,
     with_writer,
 )
-from .leaves import make_handlers, render_placeholders
+from .leaves import execute_sql, group_children, pluck_keys, render_placeholders, with_leaf_transport
 
 __version__ = "2.2.15"
 
@@ -212,8 +210,12 @@ __all__ = [
     "session_statements",
     "single_pool_pair",
     "with_writer",
-    # op-agnostic leaf transport for the bc-generated native (ir-exec) modules (#141 / epic #123)
-    # + the render-layer placeholder resolution (`?`→`$N`) the leaf transport applies
-    "make_handlers",
+    # the op-agnostic leaf transports a bc-generated python-native module calls (#141 / #387), the
+    # ambient binding a caller opens around those calls, and the render-layer placeholder resolution
+    # (`?`→`$N`) the SQL transport applies
+    "execute_sql",
+    "group_children",
+    "pluck_keys",
     "render_placeholders",
+    "with_leaf_transport",
 ]

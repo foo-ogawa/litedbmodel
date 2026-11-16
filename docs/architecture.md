@@ -421,15 +421,16 @@ bc が自動生成する。実行時のサーフェスは **3本の op 非依存
 命令パス**で走る（`src/scp/emit/endpoint.ts`）。SKIP は「動的だから v1」ではない — optional 述語は §8 の
 断片モデルで codegen 経路に載る。
 
-3言語グループの実行モデルは bc の native codegen が決める（go/rust は typed-native の直呼び、py/php は bc
-runtime-core `runBehavior` に生成モジュールの IR リテラルを渡す形）。いずれも **同一コンパイラ・同一 native
-モジュール**を共有するので、経路差による意味論のズレは構造上生じない。
+各言語の実行モデルは bc の native codegen が決める（go/rust は `go-typed-native` / `rust-typed-native`、
+py/php は `python-native` / `php-native`。いずれも IR を持たない生成コードで、リーフ転送を直接呼ぶ）。
+同一の IR から同一のコンパイラが各言語の生成物を出すので、経路差による意味論のズレは構造上生じない。
 
 ---
 
 ## 10. 多言語 Runtime と Conformance
 
-- 各言語 runtime = **bc runtime-core（共有）+ litedbmodel SQL runtime**（driver + assembly + dialect）。
+- 各言語 runtime = **litedbmodel SQL runtime**（driver + assembly + dialect + リーフ転送）。go / rust は bc の
+  値・plan primitives を共有し、python / php の runtime は bc に依存しない（生成モジュールが単体で完結する）。
 - Conformance（bc の golden 方式）: 同一エンドポイント + 同一入力 → **同一 SQL テキスト + 同一 assembly 結果**。
 - **分解**: 方言軸はコンパイル時に **TS 側で1回検証**（`src/scp/dialect.ts` の doc-comment: `方言軸は
   コンパイル時に TS 側で1回検証`。既存 SqlBuilder 資産 + golden SQL）。言語軸は「同一入力 → 同一 SQL +

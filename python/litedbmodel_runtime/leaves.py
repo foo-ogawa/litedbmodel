@@ -1,43 +1,43 @@
 """litedbmodel v2 SCP — the op-INDEPENDENT leaf transport (#141), Python port of ``src/scp/leaves.ts``.
 
-The three op-agnostic (NOT per-op) leaves the bc python emitter's ir-exec runner (``run_behavior``)
-calls by catalog name via boundary injection (``bind(handlers)``). Each is a bc handler
-(``handler(ports, ctx) -> {"ok": value} | {"error": str}``) — the SAME contract the rust/go
-typed-native runners call positionally (``rust/litedbmodel_runtime/src/leaves.rs``
-``execute_sql``/``pluck_keys``/``group_children``), reproduced for the python literal (ir-exec) path
-(epic #123: ts/go/rust = native de-box; py/php = literal). Python's native value model is the plain
-``dict`` record, so there is NO ``WireValue`` conversion — the wire IS the dict.
+The three op-agnostic (NOT per-op) leaves a bc ``python-native`` module calls DIRECTLY, each with ONE
+payload (port name → value) — the SAME contract the rust/go typed-native runners call
+(``rust/litedbmodel_runtime/src/leaves.rs`` ``execute_sql``/``pluck_keys``/``group_children``). A failure
+is an exception: the generated module applies the node's policy Kind to it. Python's native value model is
+the plain ``dict`` record, so there is NO ``WireValue`` conversion — the wire IS the dict.
 
-  - ``executeSQL`` — the SOLE SQL transport: render ``?``→dialect placeholders, bind params (an array
-    param — a relation key set from ``pluck`` or a batch record set — rides per dialect: sqlite/mysql
-    JSON-encode it for ``json_each``/``JSON_TABLE``, postgres binds the array as-is), and run it through
-    the runtime's central execute/run seam (:func:`exec_context.execute` / :func:`exec_context.run`) on
-    the bound driver — the ONLY driver contact. Everything besides the statement rides in the OPTIONAL
-    ``opts`` control record (absent ⇒ a plain read): ``opts["guard"]`` is the RELATION runaway cap of a
-    guarded relation child fetch (absent/None ⇒ uncapped), asserted against the raw rows HERE
-    (:meth:`errors.LimitExceededError.check`) because past ``group`` the graph is already nested. A
-    non-returning write returns a one-row ``[{changes, lastInsertRowid}]`` summary so the leaf output
-    shape is uniform (a list of rows).
-  - ``pluck`` — rows + the ordered key-column TUPLE → the deduped, non-null batch key set (single-key →
-    a flat scalar array; composite → an array-of-tuples). Delegates the dedupe to the shared grouping
-    core (:func:`grouping.dedupe_key_tuples`) — the SAME SSoT every relation consumer uses.
-  - ``group`` — parents + flat children → each parent with its children nested under ``into`` per
-    cardinality. Delegates to the shared grouping core (:func:`grouping.group_by_key` /
+  - ``execute_sql`` — the SOLE SQL transport: render ``?``→dialect placeholders, bind params (an array
+    param — a relation key set from ``pluck_keys`` or a batch record set — rides per dialect:
+    sqlite/mysql JSON-encode it for ``json_each``/``JSON_TABLE``, postgres binds the array as-is), and run
+    it through the runtime's central execute/run seam (:func:`exec_context.execute` /
+    :func:`exec_context.run`) on the BOUND execution context — the ONLY driver contact. Everything besides
+    the statement rides in the OPTIONAL ``opts`` control record (absent ⇒ a plain read):
+    ``opts["guard"]`` is the RELATION runaway cap of a guarded relation child fetch (absent/None ⇒
+    uncapped), asserted against the raw rows HERE (:meth:`errors.LimitExceededError.check`) because past
+    ``group_children`` the graph is already nested. A non-returning write returns a one-row
+    ``[{changes, lastInsertRowid}]`` summary so the leaf output shape is uniform (a list of rows).
+  - ``pluck_keys`` — rows + the ordered key-column TUPLE → the deduped, non-null batch key set
+    (single-key → a flat scalar array; composite → an array-of-tuples). Delegates the dedupe to the shared
+    grouping core (:func:`grouping.dedupe_key_tuples`) — the SAME SSoT every relation consumer uses.
+  - ``group_children`` — parents + flat children → each parent with its children nested under ``into``
+    per cardinality. Delegates to the shared grouping core (:func:`grouping.group_by_key` /
     :func:`grouping.attach_to_parent`) — the SAME SSoT, no duplicated grouping.
 
-The leaf is injected driver-bound (a closure over the :class:`ExecutionContext` + dialect) rather than
-resolving a thread-local ambient driver: the bc python boundary is ``bind(handlers)``, so the transport
-is handed in directly (the rust/go typed-native path resolves an ambient driver because the generated
-code calls the leaf with no driver arg — the python ir-exec path injects it).
+The generated module takes no driver argument, so ``execute_sql`` resolves the execution context and the
+dialect from the AMBIENT binding a caller opens with :func:`with_leaf_transport` around its calls (the
+python form of go's ``BindLeafTransport`` / rust's ``with_ambient_context``). It is a ``contextvars``
+binding: a concurrent scope sees its own, and a generated module's parallel stage runs its workers in a
+copy of the caller's context, so they see it too.
 """
 
 from __future__ import annotations
 
+import contextvars
 import json
-from typing import Any, Callable, Dict, List, Mapping, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, TypeVar, Union
 
 from .driver import Driver, rewrite_unquoted_placeholders
-from .errors import LimitExceededError, SqlFailure
+from .errors import LimitExceededError
 from .exec_context import (
     ExecutionContext,
     StatementIntent,
@@ -48,12 +48,39 @@ from .exec_context import execute as seam_execute
 from .exec_context import run as seam_run
 from .grouping import attach_to_parent, dedupe_key_tuples, group_by_key
 
-__all__ = ["make_handlers", "render_placeholders"]
+__all__ = ["execute_sql", "group_children", "pluck_keys", "render_placeholders", "with_leaf_transport"]
 
-# The bc handler outcome contract (behavior.py): a handler returns ``{"ok": value}`` on success or
-# ``{"error": message}`` on a fail-closed transport failure (``run_behavior`` propagates it).
-Outcome = Mapping[str, Any]
-Handler = Callable[[Mapping[str, Any], Mapping[str, Any]], Outcome]
+_T = TypeVar("_T")
+
+# The ambient binding the transport resolves: the execution context the statements run on + the dialect
+# their placeholders render for. ``None`` outside a :func:`with_leaf_transport` scope.
+_binding: "contextvars.ContextVar[Optional[Tuple[ExecutionContext, str]]]" = contextvars.ContextVar(
+    "litedbmodel_leaf_transport", default=None
+)
+
+
+def with_leaf_transport(driver_or_ctx: Union[Driver, ExecutionContext], dialect: str, fn: Callable[[], _T]) -> _T:
+    """Run ``fn`` — calls of a bc ``python-native`` module's entries — with the leaf transport bound to
+    ``driver_or_ctx`` (a driver, or an :class:`ExecutionContext` whose routing / middleware / named-DB
+    registry then resolve per statement) and ``dialect``. The prior binding is restored on exit, so scopes
+    nest. Bind per request with that request's context: the context is the request scope."""
+    token = _binding.set((as_context(driver_or_ctx), dialect))
+    try:
+        return fn()
+    finally:
+        _binding.reset(token)
+
+
+def _bound() -> Tuple[ExecutionContext, str]:
+    """The ambient binding, or a LOUD failure: a statement with no execution context has no connection to
+    run on, and there is nothing else to fall back to."""
+    b = _binding.get()
+    if b is None:
+        raise LookupError(
+            "scp leaf: execute_sql called with no bound execution context — call the generated entry inside "
+            "with_leaf_transport(ctx, dialect, fn)"
+        )
+    return b
 
 
 # ── the DYNAMIC (SKIP) WHERE: assembled by the transport, at execution time ────────────────────
@@ -199,116 +226,111 @@ def _bind_params(params: Sequence[Any], dialect: str) -> List[Any]:
     return out
 
 
-def make_handlers(driver_or_ctx: Union[Driver, ExecutionContext], dialect: str) -> Dict[str, Handler]:
-    """The op-agnostic leaf transport handlers (``executeSQL``/``pluck``/``group``), bound to a driver
-    (or an :class:`ExecutionContext`) + its ``dialect``, ready to inject into a bc-generated python
-    module's ``bind(handlers)``. Every SQL access funnels through the central execute/run seam over the
-    bound driver — the SAME seam the runtime read/relation path uses (middleware-visible, N+1-free)."""
-    ctx = as_context(driver_or_ctx)
-
-    def execute_sql(ports: Mapping[str, Any], _ctx: Mapping[str, Any]) -> Outcome:
-        # Resolve the AMBIENT tx-scoped ctx when this leaf runs inside a `with_transaction` /
-        # `transaction` scope opened on the bound ctx's owner (`run_with_pinned_context` pins it), so every statement of the tx's own database (an unnamed one, or one naming that database) 
-        # resolves the tx-OWNED connection — the tx boundary is the runtime's (BEGIN/COMMIT/ROLLBACK), not baked into
-        # the generated runner. Outside such a tx (none open, or one open on ANOTHER owner),
-        # `current_context(ctx)` is None ⇒ the bound driver ctx.
-        active = current_context(ctx) or ctx
-        # The OPTIONAL ``opts`` control record — how to run the statement plus the two optional control
-        # structs. An OMITTED port is the ONE legitimate absence: a plain READ with no dynamic WHERE and
-        # no cap (the ONE statement shape that omits it, so its payload is ``sql`` + ``params`` and
-        # nothing else). Once the port IS there it is read exactly like every field below — its own
-        # ``None`` is the same plain read, anything that is not the control record is an ABI break.
-        opts = _required(ports, "opts", _PAYLOAD, "record|null") if "opts" in ports else None
-        # The NAMED connection (database) this statement runs on — the only control field that is a bare
-        # nullable STRING rather than a struct. ``None`` ⇒ the DEFAULT connection; an ABSENT KEY is LOUD
-        # like every other field of a record that IS present, because a name read as "no name" runs the
-        # statement against a DIFFERENT database than its model declares (#217).
-        db = None if opts is None else _required(opts, "db", _RECORD, "string|null")
-        # The DYNAMIC (SKIP) WHERE is assembled FIRST: the final statement shape is only known here,
-        # so the placeholder render must follow it (CLAUDE.md §2).
-        # Every FIELD of a record that IS present is required — a missing or mistyped key is an ABI
-        # break, not an absent value.
-        plan = None if opts is None else _required(opts, "whereDynamic", _RECORD, "record|null")
-        effective_sql, effective_params = _effective_statement(ports, plan)
-        if dialect == "postgres":
-            # The DEFERRED `?::<T>[]` element type (#46) is resolved from the REAL bound key set —
-            # the same render-layer step, and the same SSoT, the imperative relation path uses.
-            for p in effective_params:
-                if isinstance(p, list):
-                    effective_sql = resolve_pg_array_cast(effective_sql, p)
-        sql = render_placeholders(effective_sql, dialect)
-        params = _bind_params(effective_params, dialect)
-        try:
-            # ``write`` is the statement's RUN MODE: None ⇒ a read; a mapping ⇒ a write carrying its
-            # OWN ``returning`` (ONE field, three values — "returns rows but is not a write" is not a
-            # state the ABI can hold, #206).
-            write = None if opts is None else _required(opts, "write", _RECORD, "record|null")
-            # The seam INTENT the RUN MODE reduces to: a write mode PRESENT ⇒ a WRITE (the writer / tx
-            # connection), absent ⇒ a READ. Derived BEFORE the branch, because the branch selects the
-            # SEAM (``returning`` ⇒ the row seam) while the intent selects the CONNECTION
-            # (:func:`~litedbmodel_runtime.connection_routing.resolve_pool`): a RETURNING write runs on
-            # ``seam_execute`` and still belongs on the WRITER. Reading ``returning`` as the intent sent
-            # ``INSERT … RETURNING`` to the READ REPLICA (#207).
-            #
-            # The NAMED database rides on the SAME intent, because ``resolve_pool`` resolves both
-            # together: it picks the named connection's reader/writer PAIR first, then the write/sticky
-            # split within it. ``None`` ⇒ the default connection, i.e. the intent every single-DB
-            # statement has always carried.
-            intent = StatementIntent(write is not None, db)
-            if write is not None and not _required(write, "returning", "the 'write' mode", "bool"):
-                info = seam_run(active, sql, params, intent)
-                # The affected-write summary row (uniform ``items`` output shape — TS ``writeSummary``).
-                return {"ok": [{"changes": info.changes, "lastInsertRowid": info.last_insert_rowid}]}
-            rows = seam_execute(active, sql, params, intent)
-        except SqlFailure as e:
-            return {"error": e.message}
-        # The RELATION runaway guard, on the RAW child rows — the only point they are visible (past
-        # ``group`` the graph is already nested) and the reason the cap rides on this transport at all.
-        # The comparison + error assembly are the shared :meth:`LimitExceededError.check` SSoT, so this
-        # path cannot drift from the TS reference. It
-        # RAISES rather than returning ``{"error": …}``: a runaway is a litedbmodel policy error with
-        # typed fields, not a mapped transport failure (the TS leaf throws the same class).
-        guard = None if opts is None else _required(opts, "guard", _RECORD, "record|null")
-        if guard is not None:
-            at = "the 'guard' cap"
-            LimitExceededError.check(
-                _required(guard, "limit", at, "int"),
-                len(rows),
-                "relation",
-                _required(guard, "model", at, "string|null"),
-                _required(guard, "relation", at, "string"),
-            )
-        return {"ok": rows}
-
-    # ``pluck`` / ``group`` read their ports through the SAME fail-closed reader the SQL transport uses
-    # (:func:`_required`) — a FLAT port shape is not a reason to trust it. A raw index turned a MISTYPED
-    # ``single`` into a silently flipped relation CARDINALITY (a ``hasMany`` nesting ONE child), a
-    # mistyped ``into`` into a relation nested under a stringified number, and an absent ``pk`` / ``col``
-    # into a bare ``KeyError`` that names no port at all (#213).
-
-    def pluck(ports: Mapping[str, Any], _ctx: Mapping[str, Any]) -> Outcome:
-        col: Sequence[str] = _required(ports, "col", _PLUCK, "string[]")
-        tuples = dedupe_key_tuples(_required(ports, "rows", _PLUCK, "list"), col)
-        # single-key → a flat scalar key array (json_each scalar ``value``); composite → an
-        # array-of-tuples (json_each per-ordinal ``$[i]``) — the shape the batched child SELECT binds.
-        keys = [t[0] for t in tuples] if len(col) == 1 else [list(t) for t in tuples]
-        return {"ok": keys}
-
-    def group(ports: Mapping[str, Any], _ctx: Mapping[str, Any]) -> Outcome:
-        into = _required(ports, "into", _GROUP, "string")
-        single = _required(ports, "single", _GROUP, "bool")
-        pk: Sequence[str] = _required(ports, "pk", _GROUP, "string[]")
-        by_key = group_by_key(
-            _required(ports, "children", _GROUP, "list"), _required(ports, "fk", _GROUP, "string[]")
+def execute_sql(ports: Mapping[str, Any]) -> List[Any]:
+    """The SQL transport (the ``executeSQL`` leaf): run ONE statement on the bound execution context and
+    return its rows (a non-returning write: the one-row affected summary). Every SQL access funnels through
+    the central execute/run seam — the SAME seam the runtime read/relation path uses (middleware-visible,
+    N+1-free). A driver failure raises :class:`~litedbmodel_runtime.errors.SqlFailure`."""
+    ctx, dialect = _bound()
+    # Resolve the AMBIENT tx-scoped ctx when this leaf runs inside a `with_transaction` /
+    # `transaction` scope opened on the bound ctx's owner (`run_with_pinned_context` pins it), so every statement of the tx's own database (an unnamed one, or one naming that database) 
+    # resolves the tx-OWNED connection — the tx boundary is the runtime's (BEGIN/COMMIT/ROLLBACK), not baked into
+    # the generated runner. Outside such a tx (none open, or one open on ANOTHER owner),
+    # `current_context(ctx)` is None ⇒ the bound driver ctx.
+    active = current_context(ctx) or ctx
+    # The OPTIONAL ``opts`` control record — how to run the statement plus the two optional control
+    # structs. An OMITTED port is the ONE legitimate absence: a plain READ with no dynamic WHERE and
+    # no cap (the ONE statement shape that omits it, so its payload is ``sql`` + ``params`` and
+    # nothing else). Once the port IS there it is read exactly like every field below — its own
+    # ``None`` is the same plain read, anything that is not the control record is an ABI break.
+    opts = _required(ports, "opts", _PAYLOAD, "record|null") if "opts" in ports else None
+    # The NAMED connection (database) this statement runs on — the only control field that is a bare
+    # nullable STRING rather than a struct. ``None`` ⇒ the DEFAULT connection; an ABSENT KEY is LOUD
+    # like every other field of a record that IS present, because a name read as "no name" runs the
+    # statement against a DIFFERENT database than its model declares (#217).
+    db = None if opts is None else _required(opts, "db", _RECORD, "string|null")
+    # The DYNAMIC (SKIP) WHERE is assembled FIRST: the final statement shape is only known here,
+    # so the placeholder render must follow it (CLAUDE.md §2).
+    # Every FIELD of a record that IS present is required — a missing or mistyped key is an ABI
+    # break, not an absent value.
+    plan = None if opts is None else _required(opts, "whereDynamic", _RECORD, "record|null")
+    effective_sql, effective_params = _effective_statement(ports, plan)
+    if dialect == "postgres":
+        # The DEFERRED `?::<T>[]` element type (#46) is resolved from the REAL bound key set —
+        # the same render-layer step, and the same SSoT, the imperative relation path uses.
+        for p in effective_params:
+            if isinstance(p, list):
+                effective_sql = resolve_pg_array_cast(effective_sql, p)
+    sql = render_placeholders(effective_sql, dialect)
+    params = _bind_params(effective_params, dialect)
+    # ``write`` is the statement's RUN MODE: None ⇒ a read; a mapping ⇒ a write carrying its
+    # OWN ``returning`` (ONE field, three values — "returns rows but is not a write" is not a
+    # state the ABI can hold, #206).
+    write = None if opts is None else _required(opts, "write", _RECORD, "record|null")
+    # The seam INTENT the RUN MODE reduces to: a write mode PRESENT ⇒ a WRITE (the writer / tx
+    # connection), absent ⇒ a READ. Derived BEFORE the branch, because the branch selects the
+    # SEAM (``returning`` ⇒ the row seam) while the intent selects the CONNECTION
+    # (:func:`~litedbmodel_runtime.connection_routing.resolve_pool`): a RETURNING write runs on
+    # ``seam_execute`` and still belongs on the WRITER. Reading ``returning`` as the intent sent
+    # ``INSERT … RETURNING`` to the READ REPLICA (#207).
+    #
+    # The NAMED database rides on the SAME intent, because ``resolve_pool`` resolves both
+    # together: it picks the named connection's reader/writer PAIR first, then the write/sticky
+    # split within it. ``None`` ⇒ the default connection, i.e. the intent every single-DB
+    # statement has always carried.
+    intent = StatementIntent(write is not None, db)
+    if write is not None and not _required(write, "returning", "the 'write' mode", "bool"):
+        info = seam_run(active, sql, params, intent)
+        # The affected-write summary row (uniform ``items`` output shape — TS ``writeSummary``).
+        return [{"changes": info.changes, "lastInsertRowid": info.last_insert_rowid}]
+    rows = seam_execute(active, sql, params, intent)
+    # The RELATION runaway guard, on the RAW child rows — the only point they are visible (past
+    # ``group`` the graph is already nested) and the reason the cap rides on this transport at all.
+    # The comparison + error assembly are the shared :meth:`LimitExceededError.check` SSoT, so this
+    # path cannot drift from the TS reference (the TS leaf throws the same class).
+    guard = None if opts is None else _required(opts, "guard", _RECORD, "record|null")
+    if guard is not None:
+        at = "the 'guard' cap"
+        LimitExceededError.check(
+            _required(guard, "limit", at, "int"),
+            len(rows),
+            "relation",
+            _required(guard, "model", at, "string|null"),
+            _required(guard, "relation", at, "string"),
         )
-        # {...par, [into]: nested}: shallow-copy each parent (the input is not mutated — TS spread).
-        out = [
-            {**par, into: attach_to_parent(par, pk, by_key, single)}
-            for par in _required(ports, "parents", _GROUP, "list")
-        ]
-        return {"ok": out}
+    return rows
 
-    return {"executeSQL": execute_sql, "pluck": pluck, "group": group}
+# ``pluck_keys`` / ``group_children`` read their ports through the SAME fail-closed reader the SQL transport uses
+# (:func:`_required`) — a FLAT port shape is not a reason to trust it. A raw index turned a MISTYPED
+# ``single`` into a silently flipped relation CARDINALITY (a ``hasMany`` nesting ONE child), a
+# mistyped ``into`` into a relation nested under a stringified number, and an absent ``pk`` / ``col``
+# into a bare ``KeyError`` that names no port at all (#213).
+
+
+def pluck_keys(ports: Mapping[str, Any]) -> List[Any]:
+    """The ``pluck`` leaf: rows + the ordered key-column tuple → the deduped, non-null batch key set."""
+    col: Sequence[str] = _required(ports, "col", _PLUCK, "string[]")
+    tuples = dedupe_key_tuples(_required(ports, "rows", _PLUCK, "list"), col)
+    # single-key → a flat scalar key array (json_each scalar ``value``); composite → an
+    # array-of-tuples (json_each per-ordinal ``$[i]``) — the shape the batched child SELECT binds.
+    keys = [t[0] for t in tuples] if len(col) == 1 else [list(t) for t in tuples]
+    return keys
+
+
+def group_children(ports: Mapping[str, Any]) -> List[Any]:
+    """The ``group`` leaf: parents + flat children → each parent with its children under ``into``."""
+    into = _required(ports, "into", _GROUP, "string")
+    single = _required(ports, "single", _GROUP, "bool")
+    pk: Sequence[str] = _required(ports, "pk", _GROUP, "string[]")
+    by_key = group_by_key(
+        _required(ports, "children", _GROUP, "list"), _required(ports, "fk", _GROUP, "string[]")
+    )
+    # {...par, [into]: nested}: shallow-copy each parent (the input is not mutated — TS spread).
+    out = [
+        {**par, into: attach_to_parent(par, pk, by_key, single)}
+        for par in _required(ports, "parents", _GROUP, "list")
+    ]
+    return out
 
 
 # ── Render-layer placeholder resolution (spec §8) ──────────────────────────────

@@ -61,7 +61,6 @@ const STEPS = [
   { npm: 'docs', db: false },
   { npm: 'docs:bench:check', db: false },
   { npm: 'go:fmt:check', db: false },
-  { npm: 'vendor:bc-php:check', db: false },
   { npm: 'bench:codegen:drift', db: false },
   { cmd: ['bash', 'scripts/verify-rust-lints.sh'], label: 'rust fmt + clippy (all 5 crates, as CI runs them)', db: false },
   { npm: 'conformance:gen', db: false },

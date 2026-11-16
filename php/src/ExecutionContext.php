@@ -795,8 +795,8 @@ final class Context
 
     /**
      * Accept EITHER a raw `\PDO` (wrap it via {@see forPdo()} — the byte-identical backward-compat
-     * path) OR an already-built {@see ExecutionContext} (pass through). The leaf transport
-     * ({@see Leaves::makeHandlers}) takes this
+     * path) OR an already-built {@see ExecutionContext} (pass through). The leaf transport binding
+     * ({@see Leaves::withTransport()}) takes this
      * union so every existing raw-`\PDO` caller keeps working while the internals thread a ctx.
      */
     public static function of(\PDO|ExecutionContext $pdoOrCtx): ExecutionContext

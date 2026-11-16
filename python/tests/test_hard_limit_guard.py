@@ -56,13 +56,12 @@ def test_relation_guard_trips_on_the_raw_child_rows():
     import sqlite3
 
     from litedbmodel_runtime.driver import SqliteDriver
-    from litedbmodel_runtime.leaves import make_handlers
+    from litedbmodel_runtime.leaves import execute_sql, with_leaf_transport
 
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)")
     conn.executemany("INSERT INTO t (id, v) VALUES (?, ?)", [(1, "a"), (2, "b"), (3, "c")])
-    execute_sql = make_handlers(SqliteDriver(conn), "sqlite")["executeSQL"]
-    ctx = {"nodeId": "n0", "component": "executeSQL"}
+    driver = SqliteDriver(conn)
 
     def read(guard):
         # The cap is the ``guard`` FIELD of the control record; an UNCAPPED read carries no record at
@@ -70,12 +69,12 @@ def test_relation_guard_trips_on_the_raw_child_rows():
         ports = {"sql": "SELECT id, v FROM t ORDER BY id", "params": []}
         if guard is not None:
             ports["opts"] = {"db": None, "write": None, "whereDynamic": None, "guard": guard}
-        return execute_sql(ports, ctx)
+        return with_leaf_transport(driver, "sqlite", lambda: execute_sql(ports))
 
     cap = lambda limit: {"limit": limit, "model": "t", "relation": "things"}  # noqa: E731
 
-    # 3 rows > cap 2 ⇒ raises before the rows are handed on (an `{"error": …}` outcome would NOT do:
-    # a runaway is a typed litedbmodel policy error, not a mapped transport failure).
+    # 3 rows > cap 2 ⇒ raises before the rows are handed on — a LimitExceededError, the typed litedbmodel
+    # policy error, not the SqlFailure a driver failure raises.
     with pytest.raises(LimitExceededError) as ei:
         read(cap(2))
     e = ei.value
@@ -84,5 +83,5 @@ def test_relation_guard_trips_on_the_raw_child_rows():
     assert "relation 'things' on t returned 3 records, but limit is 2" in str(e)
 
     # 3 rows <= cap 3 ⇒ the rows come back untouched; no guard port at all ⇒ never checked.
-    assert len(read(cap(3))["ok"]) == 3
-    assert len(read(None)["ok"]) == 3
+    assert len(read(cap(3))) == 3
+    assert len(read(None)) == 3

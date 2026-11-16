@@ -35,9 +35,7 @@ from litedbmodel_runtime.exec_context import (
     with_transaction_decided,
 )
 from litedbmodel_runtime.exec_context import execute as seam_execute
-from litedbmodel_runtime.leaves import make_handlers
-
-CTX = {"nodeId": "n0", "component": "executeSQL"}
+from litedbmodel_runtime.leaves import execute_sql, group_children, pluck_keys, with_leaf_transport
 
 #: A MIXED read exactly as the emitter now lowers it: the bounded `id > ?` IS the statement's WHERE, so
 #: the ``sql`` port is the HEAD (up to that WHERE region) and the plan carries what finishes it — the
@@ -47,37 +45,41 @@ BASE_TAIL = {"lead": "AND", "tail": " ORDER BY id LIMIT ?", "tailParams": [2]}
 
 
 @pytest.fixture()
-def execute_sql():
+def driver():
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)")
     conn.executemany("INSERT INTO t (id, v) VALUES (?, ?)", [(1, "a"), (2, "b"), (3, "c")])
-    return make_handlers(SqliteDriver(conn), "sqlite")["executeSQL"]
+    return SqliteDriver(conn)
 
 
-def read(execute_sql, frags):
-    return execute_sql(
-        {
-            "sql": BASE_HEAD,
-            "params": [1],
-            # Everything besides the statement rides in the ONE ``opts`` control record (#193). The plan
-            # carries the frags AND the three facts that finish the statement (lead / tail / tailParams).
-            "opts": {"db": None, "write": None, "whereDynamic": {"frags": frags, **BASE_TAIL}, "guard": None},
-        },
-        CTX,
-    )["ok"]
+def read(driver, frags):
+    return with_leaf_transport(
+        driver,
+        "sqlite",
+        lambda: execute_sql(
+            {
+                "sql": BASE_HEAD,
+                "params": [1],
+                # Everything besides the statement rides in the ONE ``opts`` control record (#193). The
+                # plan carries the frags AND the three facts that finish the statement (lead / tail /
+                # tailParams).
+                "opts": {"db": None, "write": None, "whereDynamic": {"frags": frags, **BASE_TAIL}, "guard": None},
+            }
+        ),
+    )
 
 
-def test_dynamic_where_continues_a_bounded_where(execute_sql):
+def test_dynamic_where_continues_a_bounded_where(driver):
     # `id > 1 AND v = 'c' ORDER BY id LIMIT 2` selects exactly row 3. Any other assembly fails loud or
     # empty: a second ` WHERE ` is a syntax error, and any other param order binds `id > 'c'` / `v = 1`.
-    rows = read(execute_sql, [{"skipped": False, "sql": "v = ?", "params": ["c"]}])
+    rows = read(driver, [{"skipped": False, "sql": "v = ?", "params": ["c"]}])
     assert [r["id"] for r in rows] == [3]
 
 
-def test_a_skipped_fragment_is_dropped_from_text_and_binding(execute_sql):
+def test_a_skipped_fragment_is_dropped_from_text_and_binding(driver):
     # The skipped fragment's param is never bound (else the bind count would not match the `?`s).
     rows = read(
-        execute_sql,
+        driver,
         [
             {"skipped": True, "sql": "v = ?", "params": [None]},
             {"skipped": False, "sql": "v <> ?", "params": ["b"]},
@@ -86,9 +88,9 @@ def test_a_skipped_fragment_is_dropped_from_text_and_binding(execute_sql):
     assert [r["id"] for r in rows] == [3]
 
 
-def test_every_fragment_skipped_runs_the_statement_as_compiled(execute_sql):
+def test_every_fragment_skipped_runs_the_statement_as_compiled(driver):
     # No survivor ⇒ the emitted statement is untouched: its OWN bounded WHERE + page tail still apply.
-    rows = read(execute_sql, [{"skipped": True, "sql": "v = ?", "params": [None]}])
+    rows = read(driver, [{"skipped": True, "sql": "v = ?", "params": [None]}])
     assert [r["id"] for r in rows] == [2, 3]
 
 
@@ -123,7 +125,7 @@ def _opts(**kw):
     }
 
 
-def test_a_missing_or_mistyped_field_of_a_present_struct_is_loud(execute_sql):
+def test_a_missing_or_mistyped_field_of_a_present_struct_is_loud(driver):
     sql = "SELECT id, v FROM t ORDER BY id"
     cap = {"limit": 2, "model": "t", "relation": "things"}
 
@@ -178,22 +180,25 @@ def test_a_missing_or_mistyped_field_of_a_present_struct_is_loud(execute_sql):
         (_plan({"skipped": False, "sql": 42, "params": []}), "fragment's 'sql' must be string"),
         (_plan({"skipped": False, "sql": "v = ?", "params": "z"}), "fragment's 'params' must be list"),
     ]
-    for ports, want in cases:
-        with pytest.raises(ValueError) as ei:
-            execute_sql(ports, CTX)
-        assert want in str(ei.value), f"{ports}: {ei.value} does not name the broken field ({want})"
+    def body():
+        for ports, want in cases:
+            with pytest.raises(ValueError) as ei:
+                execute_sql(ports)
+            assert want in str(ei.value), f"{ports}: {ei.value} does not name the broken field ({want})"
 
-    # The LEGAL absences stay silent: an omitted record is a plain read, and a null FIELD is how an
-    # absent write mode / plan / cap is spelled.
-    assert len(execute_sql({"sql": sql, "params": []}, CTX)["ok"]) == 3
-    all_null = {"db": None, "write": None, "whereDynamic": None, "guard": None}
-    assert len(execute_sql({"sql": sql, "params": [], "opts": all_null}, CTX)["ok"]) == 3
-    # …and a cap that IS spelled still trips (the fail-closed reads did not disarm it).
-    with pytest.raises(LimitExceededError):
-        execute_sql({"sql": sql, "params": [], "opts": {**all_null, "guard": cap}}, CTX)
-    # A WELL-FORMED plan still assembles: the surviving fragment applies, the skipped one does not.
-    assert [r["id"] for r in execute_sql(_plan({"skipped": False, "sql": "v = ?", "params": ["c"]}), CTX)["ok"]] == [3]
-    assert len(execute_sql(_plan({"skipped": True, "sql": "v = ?", "params": [None]}), CTX)["ok"]) == 3
+        # The LEGAL absences stay silent: an omitted record is a plain read, and a null FIELD is how an
+        # absent write mode / plan / cap is spelled.
+        assert len(execute_sql({"sql": sql, "params": []})) == 3
+        all_null = {"db": None, "write": None, "whereDynamic": None, "guard": None}
+        assert len(execute_sql({"sql": sql, "params": [], "opts": all_null})) == 3
+        # …and a cap that IS spelled still trips (the fail-closed reads did not disarm it).
+        with pytest.raises(LimitExceededError):
+            execute_sql({"sql": sql, "params": [], "opts": {**all_null, "guard": cap}})
+        # A WELL-FORMED plan still assembles: the surviving fragment applies, the skipped one does not.
+        assert [r["id"] for r in execute_sql(_plan({"skipped": False, "sql": "v = ?", "params": ["c"]}))] == [3]
+        assert len(execute_sql(_plan({"skipped": True, "sql": "v = ?", "params": [None]}))) == 3
+
+    with_leaf_transport(driver, "sqlite", body)
 
 
 # #207 — the leaf hands the central seam ONE StatementIntent, derived from the statement's RUN MODE, and
@@ -235,37 +240,38 @@ def test_the_run_mode_not_the_seam_branch_picks_the_pool():
         ).build(),
         WriterStickyClock(use_writer_after_transaction=False),
     )
-    execute_sql = make_handlers(ExecutionContext(None, MiddlewareChain(), routing=routing), "sqlite")["executeSQL"]
+    ctx = ExecutionContext(None, MiddlewareChain(), routing=routing)
 
-    # A plain READ — the bounded payload that omits the control record entirely → the READER.
-    execute_sql({"sql": "SELECT id FROM users", "params": []}, CTX)
-    assert log == ["reader"]
+    def body():
+        # A plain READ — the bounded payload that omits the control record entirely → the READER.
+        execute_sql({"sql": "SELECT id FROM users", "params": []})
+        assert log == ["reader"]
 
-    # A RETURNING write → the WRITER, even though it runs on the ROW seam. This is the #207 case: with
-    # the intent taken from the branch it landed on the reader above.
-    returning = execute_sql(
-        {
-            "sql": "INSERT INTO users (name) VALUES (?) RETURNING id",
-            "params": ["A"],
-            "opts": {"db": None, "write": {"returning": True}, "whereDynamic": None, "guard": None},
-        },
-        CTX,
-    )
-    assert log == ["reader", "writer"]
-    # …and the two decisions are INDEPENDENT, not accidentally aligned: it really did take the ROW seam.
-    assert returning == {"ok": [{"id": 1}]}
+        # A RETURNING write → the WRITER, even though it runs on the ROW seam. This is the #207 case: with
+        # the intent taken from the branch it landed on the reader above.
+        returning = execute_sql(
+            {
+                "sql": "INSERT INTO users (name) VALUES (?) RETURNING id",
+                "params": ["A"],
+                "opts": {"db": None, "write": {"returning": True}, "whereDynamic": None, "guard": None},
+            }
+        )
+        assert log == ["reader", "writer"]
+        # …and the two decisions are INDEPENDENT, not accidentally aligned: it really did take the ROW seam.
+        assert returning == [{"id": 1}]
 
-    # A NON-returning write → the WRITER too (the half that was already right stays right).
-    summary = execute_sql(
-        {
-            "sql": "INSERT INTO users (name) VALUES (?)",
-            "params": ["B"],
-            "opts": {"db": None, "write": {"returning": False}, "whereDynamic": None, "guard": None},
-        },
-        CTX,
-    )
-    assert log == ["reader", "writer", "writer"]
-    assert summary == {"ok": [{"changes": 1, "lastInsertRowid": 2}]}
+        # A NON-returning write → the WRITER too (the half that was already right stays right).
+        summary = execute_sql(
+            {
+                "sql": "INSERT INTO users (name) VALUES (?)",
+                "params": ["B"],
+                "opts": {"db": None, "write": {"returning": False}, "whereDynamic": None, "guard": None},
+            }
+        )
+        assert log == ["reader", "writer", "writer"]
+        assert summary == [{"changes": 1, "lastInsertRowid": 2}]
+
+    with_leaf_transport(ctx, "sqlite", body)
 
 
 # #213 — ``pluck`` / ``group`` read their ports through the SAME fail-closed reader as the SQL transport.
@@ -277,7 +283,6 @@ def test_the_run_mode_not_the_seam_branch_picks_the_pool():
 
 
 def test_a_missing_or_mistyped_pluck_or_group_port_is_loud():
-    handlers = make_handlers(SqliteDriver(sqlite3.connect(":memory:")), "sqlite")
     rows = [{"id": 1}, {"id": 2}]
     kids = [{"post_id": 1, "t": "a"}, {"post_id": 1, "t": "b"}]
     pluck_ports = lambda **kw: {"rows": rows, "col": ["id"], **kw}  # noqa: E731
@@ -289,39 +294,37 @@ def test_a_missing_or_mistyped_pluck_or_group_port_is_loud():
 
     for name in ("rows", "col"):
         with pytest.raises(ValueError, match=rf"the pluck payload is missing its '{name}' field"):
-            handlers["pluck"](drop(pluck_ports(), name), CTX)
+            pluck_keys(drop(pluck_ports(), name))
     for name in ("parents", "children", "pk", "fk", "into", "single"):
         with pytest.raises(ValueError, match=rf"the group payload is missing its '{name}' field"):
-            handlers["group"](drop(group_ports(), name), CTX)
+            group_children(drop(group_ports(), name))
 
     # The MISTYPED ports — the silent failures the issue measured.
     mistyped = [
-        ("pluck", pluck_ports(rows="x"), "the pluck payload's 'rows' must be list"),
-        ("pluck", pluck_ports(col=[1]), "the pluck payload's 'col' must be string[]"),
-        ("group", group_ports(single="yes"), "the group payload's 'single' must be bool"),
-        ("group", group_ports(into=42), "the group payload's 'into' must be string"),
-        ("group", group_ports(pk=[1]), "the group payload's 'pk' must be string[]"),
-        ("group", group_ports(fk="post_id"), "the group payload's 'fk' must be string[]"),
-        ("group", group_ports(parents="x"), "the group payload's 'parents' must be list"),
-        ("group", group_ports(children="x"), "the group payload's 'children' must be list"),
+        (pluck_keys, pluck_ports(rows="x"), "the pluck payload's 'rows' must be list"),
+        (pluck_keys, pluck_ports(col=[1]), "the pluck payload's 'col' must be string[]"),
+        (group_children, group_ports(single="yes"), "the group payload's 'single' must be bool"),
+        (group_children, group_ports(into=42), "the group payload's 'into' must be string"),
+        (group_children, group_ports(pk=[1]), "the group payload's 'pk' must be string[]"),
+        (group_children, group_ports(fk="post_id"), "the group payload's 'fk' must be string[]"),
+        (group_children, group_ports(parents="x"), "the group payload's 'parents' must be list"),
+        (group_children, group_ports(children="x"), "the group payload's 'children' must be list"),
         # A KEYED map is a ``record`` on this plane, never a list. php's ``is_array`` used to say
         # otherwise, so the case is pinned in all three of the legs that can spell it.
-        ("pluck", pluck_ports(rows={"a": 1}), "the pluck payload's 'rows' must be list"),
-        ("pluck", pluck_ports(col={"a": "id"}), "the pluck payload's 'col' must be string[]"),
+        (pluck_keys, pluck_ports(rows={"a": 1}), "the pluck payload's 'rows' must be list"),
+        (pluck_keys, pluck_ports(col={"a": "id"}), "the pluck payload's 'col' must be string[]"),
     ]
     for leaf, ports, want in mistyped:
         with pytest.raises(ValueError) as ei:
-            handlers[leaf](ports, CTX)
+            leaf(ports)
         assert want in str(ei.value), f"{ports}: {ei.value} does not name the broken port ({want})"
 
     # The LEGAL shapes stay silent, and the CARDINALITY the ports declare is the one that comes out: a
     # hasMany nests the LIST, ``single`` nests the ONE child. (The mistyped ``single`` above used to land
     # on the other branch without a word.)
-    assert handlers["pluck"](pluck_ports(), CTX) == {"ok": [1, 2]}
-    assert handlers["group"](group_ports(), CTX) == {"ok": [{"id": 1, "kids": kids}, {"id": 2, "kids": []}]}
-    assert handlers["group"](group_ports(single=True), CTX) == {
-        "ok": [{"id": 1, "kids": kids[0]}, {"id": 2, "kids": None}]
-    }
+    assert pluck_keys(pluck_ports()) == [1, 2]
+    assert group_children(group_ports()) == [{"id": 1, "kids": kids}, {"id": 2, "kids": []}]
+    assert group_children(group_ports(single=True)) == [{"id": 1, "kids": kids[0]}, {"id": 2, "kids": None}]
 
 
 # #215 — a covered-plane transaction is the runtime's ONE transaction: it acquires from the WRITER pool,
@@ -352,11 +355,10 @@ def test_a_covered_transaction_opens_on_the_writer_and_is_seam_visible():
         WriterStickyClock(use_writer_after_transaction=True, writer_sticky_duration=5000, now=lambda: clock[0]),
     )
     ctx = ExecutionContext(None, MiddlewareChain(active_sql_middlewares), routing=routing)
-    execute_sql = make_handlers(ctx, "sqlite")["executeSQL"]
     seen: list = []
 
     def read():
-        return execute_sql({"sql": "SELECT id FROM users", "params": []}, CTX)
+        return execute_sql({"sql": "SELECT id FROM users", "params": []})
 
     def observe(_state, next_, sql, params):
         seen.append(sql)
@@ -376,8 +378,7 @@ def test_a_covered_transaction_opens_on_the_writer_and_is_seam_visible():
                     "sql": "INSERT INTO users (name) VALUES (?)",
                     "params": ["A"],
                     "opts": {"db": None, "write": {"returning": False}, "whereDynamic": None, "guard": None},
-                },
-                CTX,
+                }
             )
 
         with_transaction(ctx, in_tx)
@@ -385,7 +386,7 @@ def test_a_covered_transaction_opens_on_the_writer_and_is_seam_visible():
         clock[0] += 100
         read()
 
-    with_middleware_scope(body)
+    with_middleware_scope(lambda: with_leaf_transport(ctx, "sqlite", body))
 
     assert pools == ["reader", "writer", "writer"]
     assert seen == [
@@ -439,17 +440,19 @@ def _named_db_context():
 
 
 def _named_db_reader(ctx):
-    """The leaf's `executeSQL`, bound to `ctx`, reading the table that exists ONLY in "B"."""
-    handler = make_handlers(ctx, "sqlite")["executeSQL"]
+    """The leaf's `executeSQL` transport, bound to `ctx`, reading the table that exists ONLY in "B"."""
 
     def read(db):
-        return handler(
-            {
-                "sql": "SELECT id, name FROM named_users ORDER BY id",
-                "params": [],
-                "opts": {"db": db, "write": None, "whereDynamic": None, "guard": None},
-            },
-            CTX,
+        return with_leaf_transport(
+            ctx,
+            "sqlite",
+            lambda: execute_sql(
+                {
+                    "sql": "SELECT id, name FROM named_users ORDER BY id",
+                    "params": [],
+                    "opts": {"db": db, "write": None, "whereDynamic": None, "guard": None},
+                }
+            ),
         )
 
     return read
@@ -463,7 +466,7 @@ def _named_db_handler():
 def test_named_db_routes_the_statement():
     read, log = _named_db_handler()
     # NAMED ⇒ B served it. The rows are unforgeable: `named_users` exists in NO other registered db.
-    assert read("B")["ok"] == [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Bob"}]
+    assert read("B") == [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Bob"}]
     assert log == ["B"]
     # NEGATIVE CONTROL — the name DROPPED (``None``, which is exactly the pre-#217 lowering) sends the
     # SAME statement to the DEFAULT connection, where the table does not exist. Measured, not reasoned:
@@ -484,22 +487,21 @@ def test_named_db_routes_the_relation_batch(relation_through_leaves):
     the leaf carries it to ``connection_for`` and the ONE ``ConnectionRegistry`` resolves it. The tables
     are DISJOINT, so a mis-routed half sees no table at all."""
     ctx, log = _named_db_context()
-    handlers = make_handlers(ctx, "sqlite")
     parent_sql = "SELECT id FROM only_in_a ORDER BY id"
     child_sql = "SELECT id, name FROM named_users WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id"
 
     # NAMED ⇒ B served the child fetch; the nested row proves it (`named_users` is on NO other connection).
-    grouped = relation_through_leaves(handlers, parent_sql, child_sql, "id", "id", "kids", "B")
+    grouped = relation_through_leaves(ctx, "sqlite", parent_sql, child_sql, "id", "id", "kids", "B")
     assert [k["name"] for k in grouped[0]["kids"]] == ["Ada"]
     assert log == ["A", "B"]  # parent read on the default connection, child fetch on the named one
     # NEGATIVE CONTROL — the SAME relation with the child fetch's name DROPPED (``None``, exactly the
     # pre-#217 lowering) sends it to the DEFAULT connection, where `named_users` does not exist.
     with pytest.raises(Exception) as ei:
-        relation_through_leaves(handlers, parent_sql, child_sql, "id", "id", "kids", None)
+        relation_through_leaves(ctx, "sqlite", parent_sql, child_sql, "id", "id", "kids", None)
     assert "named_users" in str(ei.value)
     # An UNREGISTERED name is LOUD, never a silent fall back to the parent's database.
     with pytest.raises(ValueError, match="no connection registered under name 'ghost'"):
-        relation_through_leaves(handlers, parent_sql, child_sql, "id", "id", "kids", "ghost")
+        relation_through_leaves(ctx, "sqlite", parent_sql, child_sql, "id", "id", "kids", "ghost")
 
 
 def test_named_db_on_a_non_routed_context_is_loud():
@@ -508,16 +510,19 @@ def test_named_db_on_a_non_routed_context_is_loud():
     # lowering exists to prevent — and a single-DB deployment is exactly where it would go unnoticed.
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY)")
-    handler = make_handlers(SqliteDriver(conn), "sqlite")["executeSQL"]
     ports = lambda db: {  # noqa: E731 — one expression, read twice
         "sql": "SELECT id FROM t",
         "params": [],
         "opts": {"db": db, "write": None, "whereDynamic": None, "guard": None},
     }
-    with pytest.raises(ValueError, match="a statement names connection 'analytics'"):
-        handler(ports("analytics"), CTX)
-    # The DEFAULT connection is the single-driver case itself and still runs.
-    assert handler(ports(None), CTX)["ok"] == []
+
+    def body():
+        with pytest.raises(ValueError, match="a statement names connection 'analytics'"):
+            execute_sql(ports("analytics"))
+        # The DEFAULT connection is the single-driver case itself and still runs.
+        assert execute_sql(ports(None)) == []
+
+    with_leaf_transport(SqliteDriver(conn), "sqlite", body)
 
 
 # ── #217 R1/R2 — inside a transaction the named db must AGREE, or be LOUD ──────────────────────────
@@ -552,8 +557,8 @@ def test_named_db_inside_a_transaction_must_agree():
     # disagrees in the other direction.
     def named_body(tx_ctx):
         read = _named_db_reader(tx_ctx)
-        assert read("B")["ok"] == [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Bob"}]
-        assert read(None)["ok"] == [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Bob"}]
+        assert read("B") == [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Bob"}]
+        assert read(None) == [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Bob"}]
         with pytest.raises(ValueError, match="transaction opened on 'B'"):
             read("default")
         return commit(None)
@@ -577,14 +582,13 @@ def test_named_db_on_a_non_routed_context_is_loud_inside_a_transaction_too():
         "opts": {"db": db, "write": None, "whereDynamic": None, "guard": None},
     }
     with pytest.raises(ValueError, match="names connection 'analytics'"):
-        make_handlers(ctx, "sqlite")["executeSQL"](ports("analytics"), CTX)
+        with_leaf_transport(ctx, "sqlite", lambda: execute_sql(ports("analytics")))
 
     def body(tx_ctx):
-        handler = make_handlers(tx_ctx, "sqlite")["executeSQL"]
         with pytest.raises(ValueError, match="names connection 'analytics'"):
-            handler(ports("analytics"), CTX)
+            with_leaf_transport(tx_ctx, "sqlite", lambda: execute_sql(ports("analytics")))
         # …and the ordinary unnamed statement still runs on the pin.
-        assert handler(ports(None), CTX)["ok"] == []
+        assert with_leaf_transport(tx_ctx, "sqlite", lambda: execute_sql(ports(None))) == []
         return commit(None)
 
     with_transaction_decided(ctx, body)

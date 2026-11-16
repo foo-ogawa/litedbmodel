@@ -16,17 +16,17 @@ use function LiteDbModel\Runtime\withTransaction;
 /**
  * NATIVE-codegen ORM-bench cell (php leg, epic #123) — the twin of the python `orm_bench.main`.
  *
- * Self-measures the covered ORM ops through the litedbmodel-GENERATED ir-exec module
- * (`behaviors_generated.php`, verbatim `bc generate --lang php`) + `litedbmodel_runtime`'s op-agnostic
- * leaf transport ({@see Leaves::makeHandlers}), and prints a flat CSV (`cell,dialect,op,iter,us,rows`) the
- * TS collector aggregates.
+ * Self-measures the covered ORM ops through the litedbmodel-GENERATED native module
+ * (`behaviors_<dialect>.php`, verbatim `bc generate --lang php-native`), which calls the runtime's
+ * op-agnostic leaf transports ({@see Leaves}) directly, and prints a flat CSV
+ * (`cell,dialect,op,iter,us,rows`) the TS collector aggregates.
  *
- * This cell is a litedbmodel-CONSUMER: it binds the leaf transport (`makeHandlers` →
- * executeSQL/pluck/group) into the generated module's `bind($handlers)` (boundary injection — the php
- * literal/ir-exec path, epic #123: ts/go/rust = native de-box; py/php = literal) and calls the
- * resulting per-op callables. It holds NO hand-written exec seam and NO hand-written BEGIN/COMMIT:
+ * This cell is a litedbmodel-CONSUMER: it binds the leaf transport to the target's execution context
+ * ({@see Leaves::withTransport()}) around each call and calls the generated entry of the op (a static
+ * method of the anonymous class the module's `require` returns) with the op's input as its named
+ * arguments. It holds NO hand-written exec seam and NO hand-written BEGIN/COMMIT:
  *
- *   - reads/single-writes/batches run the bound op callable directly; the leaf funnels every DB access
+ *   - reads/single-writes/batches call the generated entry directly; the leaf funnels every DB access
  *     through the runtime central execute/run seam. Relations are N+1-free: parents → pluck →
  *     executeSQL(WHERE fk IN …) → group = 1 batched child query per level (nestedFindAll=2,
  *     nestedRelations=3, composite=3). Batch writes are ONE json_each statement.
@@ -135,8 +135,8 @@ final class OrmBench
     }
 
     /**
-     * Bind the op-agnostic leaf transport into the generated module — the per-op callables. The
-     * generated module `return`s the factory object; `bind` injects the handlers (boundary injection).
+     * The per-op callables of THIS dialect's generated module: each binds the leaf transport to the
+     * driver's execution context and calls the op's generated entry with the input as named arguments.
      *
      * @return array<string,callable>
      */
@@ -148,7 +148,13 @@ final class OrmBench
             throw new \RuntimeException("orm_bench: no generated module for dialect '{$dialect}'");
         }
         $mod = require __DIR__ . "/behaviors_{$dialect}.php";
-        return ($mod->bind)(Leaves::makeHandlers(Context::of($driver), $dialect));
+        $ctx = Context::of($driver);
+        $fns = [];
+        foreach (self::OPS as $op) {
+            $entry = [$mod, $op];
+            $fns[$op] = static fn (array $inp): mixed => Leaves::withTransport($ctx, $dialect, static fn (): mixed => $entry(...$inp));
+        }
+        return $fns;
     }
 
     /**
@@ -161,9 +167,9 @@ final class OrmBench
     {
         require_once __DIR__ . '/../lm_bench_setup.php';
         $inp = \lm_bench_op_input(self::setup($dialect), $op, $it);
-        // A batch row must be a RECORD, not a map: the vendored bc runtime types every PHP array as
-        // `arr` and only a stdClass as `object` (ExprEval::typeName), so a row decoded from JSON as an
-        // associative array cannot answer `.email` — which is what the PostgreSQL UNNEST transpose reads.
+        // A batch row must be a RECORD, not a map: the php value model is a `\stdClass` record and a PHP
+        // list array, so a row decoded from JSON as an associative array cannot answer `->email` — which is
+        // what the generated module reads for the PostgreSQL UNNEST transpose.
         if (isset($inp['rows']) && is_array($inp['rows'])) {
             $inp['rows'] = array_map(static fn (array $r) => (object) $r, $inp['rows']);
         }
@@ -173,8 +179,7 @@ final class OrmBench
     /**
      * Run ONE covered op through its generated callable. A RETURNING-chained tx op runs THROUGH the
      * runtime tx boundary ({@see withTransaction()} over the driver ctx) so BEGIN/COMMIT bracket the
-     * leaf's body statements on the tx-owned connection; every other op runs the bound callable
-     * directly.
+     * leaf's body statements on the tx-owned connection; every other op calls its entry directly.
      *
      * @param array<string,callable> $fns
      */

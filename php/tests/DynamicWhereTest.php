@@ -59,7 +59,7 @@ final class DynamicWhereTest extends TestCase
         $pdo = new \PDO('sqlite::memory:', null, null, [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
         $pdo->exec('CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)');
         $pdo->exec("INSERT INTO t (id, v) VALUES (1,'a'), (2,'b'), (3,'c')");
-        $this->executeSQL = Leaves::makeHandlers($pdo, 'sqlite')['executeSQL'];
+        $this->executeSQL = self::boundLeaves($pdo, 'sqlite')['executeSQL'];
     }
 
     /**
@@ -83,8 +83,8 @@ final class DynamicWhereTest extends TestCase
                 'whereDynamic' => (object) ['frags' => $frags, 'lead' => 'AND', 'tail' => ' ORDER BY id LIMIT ?', 'tailParams' => [2]],
                 'guard' => null,
             ],
-        ], ['nodeId' => 'n0', 'component' => 'executeSQL']);
-        return array_map(static fn ($r): int => (int) ((array) $r)['id'], $out['ok']);
+        ]);
+        return array_map(static fn ($r): int => (int) ((array) $r)['id'], $out);
     }
 
     public function testTheSurvivorsContinueTheBoundedWhere(): void
@@ -119,7 +119,6 @@ final class DynamicWhereTest extends TestCase
      */
     public function testAMissingOrMistypedFieldOfAPresentStructIsLoud(): void
     {
-        $ctx = ['nodeId' => 'n0', 'component' => 'executeSQL'];
         $sql = 'SELECT id, v FROM t ORDER BY id';
         $nulls = (object) ['db' => null, 'write' => null, 'whereDynamic' => null, 'guard' => null];
         // Ports whose control record carries a `whereDynamic` plan of ONE fragment (the #209 cases).
@@ -197,7 +196,7 @@ final class DynamicWhereTest extends TestCase
             // assertStringContainsString — a gate that passes while the transport runs on SILENTLY.
             $caught = null;
             try {
-                ($this->executeSQL)($ports, $ctx);
+                ($this->executeSQL)($ports);
             } catch (\RuntimeException $e) {
                 $caught = $e;
             }
@@ -207,13 +206,13 @@ final class DynamicWhereTest extends TestCase
 
         // The LEGAL absences stay silent: an omitted record is a plain read, and a null FIELD is how an
         // absent write mode / plan / cap is spelled.
-        self::assertCount(3, ($this->executeSQL)(['sql' => $sql, 'params' => []], $ctx)['ok']);
-        self::assertCount(3, ($this->executeSQL)(['sql' => $sql, 'params' => [], 'opts' => $nulls], $ctx)['ok']);
+        self::assertCount(3, ($this->executeSQL)(['sql' => $sql, 'params' => []]));
+        self::assertCount(3, ($this->executeSQL)(['sql' => $sql, 'params' => [], 'opts' => $nulls]));
 
         // A WELL-FORMED plan still assembles: the surviving fragment applies, the skipped one does not.
-        $survived = ($this->executeSQL)($plan((object) ['skipped' => false, 'sql' => 'v = ?', 'params' => ['c']]), $ctx);
-        self::assertSame([3], array_map(static fn ($r): int => (int) ((array) $r)['id'], $survived['ok']));
-        self::assertCount(3, ($this->executeSQL)($plan((object) ['skipped' => true, 'sql' => 'v = ?', 'params' => [null]]), $ctx)['ok']);
+        $survived = ($this->executeSQL)($plan((object) ['skipped' => false, 'sql' => 'v = ?', 'params' => ['c']]));
+        self::assertSame([3], array_map(static fn ($r): int => (int) ((array) $r)['id'], $survived));
+        self::assertCount(3, ($this->executeSQL)($plan((object) ['skipped' => true, 'sql' => 'v = ?', 'params' => [null]])));
 
         // …and a cap that IS spelled still trips (the fail-closed reads did not disarm it).
         $capped = ['sql' => $sql, 'params' => [], 'opts' => (object) [
@@ -221,7 +220,7 @@ final class DynamicWhereTest extends TestCase
             'guard' => (object) ['limit' => 2, 'model' => 't', 'relation' => 'things'],
         ]];
         $this->expectException(\LiteDbModel\Runtime\LimitExceededError::class);
-        ($this->executeSQL)($capped, $ctx);
+        ($this->executeSQL)($capped);
     }
 
     /**
@@ -249,14 +248,13 @@ final class DynamicWhereTest extends TestCase
             ))->build(),
             new WriterStickyClock(useWriterAfterTransaction: false),
         );
-        $executeSQL = Leaves::makeHandlers(
+        $executeSQL = self::boundLeaves(
             new RoutingExecutionContext($driver, new MiddlewareChain(), $routing),
             'sqlite',
         )['executeSQL'];
-        $ctx = ['nodeId' => 'n0', 'component' => 'executeSQL'];
 
         // A plain READ — the bounded payload that omits the control record entirely → the READER.
-        $executeSQL(['sql' => 'SELECT id FROM users', 'params' => []], $ctx);
+        $executeSQL(['sql' => 'SELECT id FROM users', 'params' => []]);
         self::assertSame(['reader'], $log->getArrayCopy());
 
         // A RETURNING write → the WRITER, even though it runs on the ROW seam. This is the #207 case:
@@ -265,21 +263,21 @@ final class DynamicWhereTest extends TestCase
             'sql' => 'INSERT INTO users (name) VALUES (?) RETURNING id',
             'params' => ['A'],
             'opts' => (object) ['db' => null, 'write' => (object) ['returning' => true], 'whereDynamic' => null, 'guard' => null],
-        ], $ctx);
+        ]);
         self::assertSame(['reader', 'writer'], $log->getArrayCopy());
         // …and the two decisions are INDEPENDENT, not accidentally aligned: it took the ROW seam.
-        self::assertSame([['id' => 1]], array_map(static fn ($r): array => (array) $r, $returning['ok']));
+        self::assertSame([['id' => 1]], array_map(static fn ($r): array => (array) $r, $returning));
 
         // A NON-returning write → the WRITER too (the half that was already right stays right).
         $summary = $executeSQL([
             'sql' => 'INSERT INTO users (name) VALUES (?)',
             'params' => ['B'],
             'opts' => (object) ['db' => null, 'write' => (object) ['returning' => false], 'whereDynamic' => null, 'guard' => null],
-        ], $ctx);
+        ]);
         self::assertSame(['reader', 'writer', 'writer'], $log->getArrayCopy());
         // The affected-rows summary, not rows (`lastInsertRowid` is deliberately 0 on this plane — see
         // {@see \LiteDbModel\Runtime\PdoConnection::run()}), so the seam it took is unambiguous.
-        $row = (array) $summary['ok'][0];
+        $row = (array) $summary[0];
         self::assertSame(['changes', 'lastInsertRowid'], array_keys($row));
         self::assertSame(1, $row['changes']);
     }
@@ -315,21 +313,20 @@ final class DynamicWhereTest extends TestCase
         // The AMBIENT middleware chain (what a routed deployment gets), so the registered observer below
         // sees every statement the seam issues — including the runtime's own tx-control.
         $execCtx = new RoutingExecutionContext($driver, Context::ambientChain(), $routing);
-        $executeSQL = Leaves::makeHandlers($execCtx, 'sqlite')['executeSQL'];
-        $ctx = ['nodeId' => 'n0', 'component' => 'executeSQL'];
+        $executeSQL = self::boundLeaves($execCtx, 'sqlite')['executeSQL'];
         $seen = [];
-        $read = static function () use ($executeSQL, $ctx): void {
-            $executeSQL(['sql' => 'SELECT id FROM users', 'params' => []], $ctx);
+        $read = static function () use ($executeSQL): void {
+            $executeSQL(['sql' => 'SELECT id FROM users', 'params' => []]);
         };
 
-        withMiddlewareScope(function () use ($execCtx, $executeSQL, $ctx, $read, &$seen, &$clock): void {
+        withMiddlewareScope(function () use ($execCtx, $executeSQL, $read, &$seen, &$clock): void {
             use_(createMiddleware(['execute' => function (callable $next, string $sql, array $params) use (&$seen) {
                 $seen[] = $sql;
                 return $next($sql, $params);
             }]));
             // Before any transaction: a plain read => the READER (the sticky clock is unarmed).
             $read();
-            routedTransaction($execCtx, static function () use ($executeSQL, $ctx, $read): void {
+            routedTransaction($execCtx, static function () use ($executeSQL, $read): void {
                 // A READ inside the tx: its intent says READER, but the tx PIN wins — and it acquires NO
                 // further pooled connection.
                 $read();
@@ -337,7 +334,7 @@ final class DynamicWhereTest extends TestCase
                     'sql' => 'INSERT INTO users (name) VALUES (?)',
                     'params' => ['A'],
                     'opts' => (object) ['db' => null, 'write' => (object) ['returning' => false], 'whereDynamic' => null, 'guard' => null],
-                ], $ctx);
+                ]);
             }, null, 'sqlite');
             // The COMMIT armed writer-sticky: the SAME plain read now routes to the WRITER.
             $clock += 100.0;
@@ -365,8 +362,7 @@ final class DynamicWhereTest extends TestCase
      */
     public function testAMissingOrMistypedPluckOrGroupPortIsLoud(): void
     {
-        $handlers = Leaves::makeHandlers(new \PDO('sqlite::memory:'), 'sqlite');
-        $ctx = ['nodeId' => 'n0', 'component' => 'group'];
+        $handlers = self::boundLeaves(new \PDO('sqlite::memory:'), 'sqlite');
         $rows = [(object) ['id' => 1], (object) ['id' => 2]];
         $kids = [(object) ['post_id' => 1, 't' => 'a'], (object) ['post_id' => 1, 't' => 'b']];
         $pluckPorts = static fn (array $kw = []): array => array_merge(['rows' => $rows, 'col' => ['id']], $kw);
@@ -374,10 +370,10 @@ final class DynamicWhereTest extends TestCase
             'parents' => $rows, 'children' => $kids, 'pk' => ['id'], 'fk' => ['post_id'],
             'into' => 'kids', 'single' => false,
         ], $kw);
-        $loud = function (string $leaf, array $ports, string $want) use ($handlers, $ctx): void {
+        $loud = function (string $leaf, array $ports, string $want) use ($handlers): void {
             $caught = null;
             try {
-                $handlers[$leaf]($ports, $ctx);
+                $handlers[$leaf]($ports);
             } catch (\RuntimeException $e) {
                 $caught = $e;
             }
@@ -415,11 +411,11 @@ final class DynamicWhereTest extends TestCase
         // The LEGAL shapes stay silent, and the CARDINALITY the ports declare is the one that comes out:
         // a hasMany nests the LIST, `single` nests the ONE child. (The mistyped `single` above used to
         // land on the other branch without a word.)
-        self::assertSame(['ok' => [1, 2]], $handlers['pluck']($pluckPorts(), $ctx));
-        $many = $handlers['group']($groupPorts(), $ctx)['ok'];
+        self::assertSame([1, 2], $handlers['pluck']($pluckPorts()));
+        $many = $handlers['group']($groupPorts());
         self::assertSame($kids, $many[0]->kids);
         self::assertSame([], $many[1]->kids);
-        $one = $handlers['group']($groupPorts(['single' => true]), $ctx)['ok'];
+        $one = $handlers['group']($groupPorts(['single' => true]));
         self::assertSame($kids[0], $one[0]->kids);
         self::assertNull($one[1]->kids);
     }
@@ -485,18 +481,17 @@ final class DynamicWhereTest extends TestCase
     public function testNamedDbRoutesTheStatement(): void
     {
         [$ctx, $log] = self::namedDbContext();
-        $executeSQL = Leaves::makeHandlers($ctx, 'sqlite')['executeSQL'];
-        $at = ['nodeId' => 'n0', 'component' => 'executeSQL'];
+        $executeSQL = self::boundLeaves($ctx, 'sqlite')['executeSQL'];
         $read = static fn (?string $db): array => $executeSQL([
             'sql' => 'SELECT id, name FROM named_users ORDER BY id',
             'params' => [],
             'opts' => (object) ['db' => $db, 'write' => null, 'whereDynamic' => null, 'guard' => null],
-        ], $at);
+        ]);
 
         // NAMED ⇒ B served it. The rows are unforgeable: `named_users` exists in NO other registered db.
         self::assertSame(
             [['id' => 1, 'name' => 'Ada'], ['id' => 2, 'name' => 'Bob']],
-            array_map(static fn ($r): array => (array) $r, $read('B')['ok']),
+            array_map(static fn ($r): array => (array) $r, $read('B')),
         );
         self::assertSame(['B'], $log->getArrayCopy());
 
@@ -529,7 +524,7 @@ final class DynamicWhereTest extends TestCase
     public function testNamedDbRoutesTheRelationChildFetch(): void
     {
         [$ctx, $log] = self::namedDbContext();
-        $handlers = Leaves::makeHandlers($ctx, 'sqlite');
+        $handlers = self::boundLeaves($ctx, 'sqlite');
         $parentSql = 'SELECT id FROM only_in_a ORDER BY id';
         $childSql = 'SELECT id, name FROM named_users WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id';
         $run = fn (?string $db): array => self::relationThroughLeaves($handlers, $parentSql, $childSql, 'id', 'id', 'kids', $db);
@@ -561,18 +556,17 @@ final class DynamicWhereTest extends TestCase
     {
         $pdo = new \PDO('sqlite::memory:', null, null, [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION]);
         $pdo->exec('CREATE TABLE t (id INTEGER PRIMARY KEY)');
-        $executeSQL = Leaves::makeHandlers($pdo, 'sqlite')['executeSQL'];
-        $at = ['nodeId' => 'n0', 'component' => 'executeSQL'];
+        $executeSQL = self::boundLeaves($pdo, 'sqlite')['executeSQL'];
         $ports = static fn (?string $db): array => [
             'sql' => 'SELECT id FROM t',
             'params' => [],
             'opts' => (object) ['db' => $db, 'write' => null, 'whereDynamic' => null, 'guard' => null],
         ];
         // The DEFAULT connection is the single-connection case itself and still runs.
-        self::assertSame([], $executeSQL($ports(null), $at)['ok']);
+        self::assertSame([], $executeSQL($ports(null)));
         $this->expectException(\RuntimeException::class);
         $this->expectExceptionMessageMatches("/a statement names connection 'analytics'/");
-        $executeSQL($ports('analytics'), $at);
+        $executeSQL($ports('analytics'));
     }
 
     /**
@@ -606,13 +600,12 @@ final class DynamicWhereTest extends TestCase
                 ->build(),
             new WriterStickyClock(useWriterAfterTransaction: false),
         );
-        $at = ['nodeId' => 'n0', 'component' => 'executeSQL'];
         $read = static fn (RoutingExecutionContext $ctx, ?string $db): array =>
-            Leaves::makeHandlers($ctx, 'sqlite')['executeSQL']([
+            self::boundLeaves($ctx, 'sqlite')['executeSQL']([
                 'sql' => 'SELECT id, name FROM named_users ORDER BY id',
                 'params' => [],
                 'opts' => (object) ['db' => $db, 'write' => null, 'whereDynamic' => null, 'guard' => null],
-            ], $at);
+            ]);
         $failure = static function (callable $fn): string {
             try {
                 $fn();
@@ -653,9 +646,9 @@ final class DynamicWhereTest extends TestCase
             self::assertInstanceOf(RoutingExecutionContext::class, $tx);
             self::assertSame(
                 [['id' => 1, 'name' => 'Ada'], ['id' => 2, 'name' => 'Bob']],
-                array_map(static fn ($r): array => (array) $r, $read($tx, 'B')['ok']),
+                array_map(static fn ($r): array => (array) $r, $read($tx, 'B')),
             );
-            self::assertCount(2, $read($tx, null)['ok']);
+            self::assertCount(2, $read($tx, null));
             self::assertStringContainsString(
                 "transaction opened on 'B'",
                 $failure(static fn () => $read($tx, 'default')),
@@ -681,7 +674,6 @@ final class DynamicWhereTest extends TestCase
             'params' => [],
             'opts' => (object) ['db' => $db, 'write' => null, 'whereDynamic' => null, 'guard' => null],
         ];
-        $at = ['nodeId' => 'n0', 'component' => 'executeSQL'];
         $failure = static function (callable $fn): string {
             try {
                 $fn();
@@ -692,20 +684,20 @@ final class DynamicWhereTest extends TestCase
         };
         self::assertStringContainsString(
             "names connection 'analytics'",
-            $failure(static fn () => Leaves::makeHandlers($ctx, 'sqlite')['executeSQL']($ports('analytics'), $at)),
+            $failure(static fn () => self::boundLeaves($ctx, 'sqlite')['executeSQL']($ports('analytics'))),
             'outside a tx',
         );
-        transaction($ctx, function () use ($ctx, $ports, $at, $failure): void {
+        transaction($ctx, function () use ($ctx, $ports, $failure): void {
             $tx = currentContext($ctx);
             self::assertNotNull($tx);
-            $handler = Leaves::makeHandlers($tx, 'sqlite')['executeSQL'];
+            $handler = self::boundLeaves($tx, 'sqlite')['executeSQL'];
             self::assertStringContainsString(
                 "names connection 'analytics'",
-                $failure(static fn () => $handler($ports('analytics'), $at)),
+                $failure(static fn () => $handler($ports('analytics'))),
                 'inside a tx (must match the outside outcome)',
             );
             // …and the ordinary unnamed statement still runs on the pin.
-            self::assertSame([], $handler($ports(null), $at)['ok']);
+            self::assertSame([], $handler($ports(null)));
         }, null, 'sqlite');
     }
 
@@ -743,13 +735,12 @@ final class DynamicWhereTest extends TestCase
                 ->build(),
             new WriterStickyClock(useWriterAfterTransaction: false),
         );
-        $at = ['nodeId' => 'n0', 'component' => 'executeSQL'];
         $read = static fn (ExecutionContext $ctx, ?string $db): array =>
-            Leaves::makeHandlers($ctx, 'sqlite')['executeSQL']([
+            self::boundLeaves($ctx, 'sqlite')['executeSQL']([
                 'sql' => 'SELECT id, name FROM named_users ORDER BY id',
                 'params' => [],
                 'opts' => (object) ['db' => $db, 'write' => null, 'whereDynamic' => null, 'guard' => null],
-            ], $at);
+            ]);
         $failure = static function (callable $fn): string {
             try {
                 $fn();
@@ -791,7 +782,7 @@ final class DynamicWhereTest extends TestCase
                 $amb = currentContext($tx);
                 self::assertInstanceOf(RoutingExecutionContext::class, $amb);
                 self::assertSame('B', $amb->connectionName(), 'withWriter must not lose the name either');
-                self::assertCount(2, $read($amb, 'B')['ok']);
+                self::assertCount(2, $read($amb, 'B'));
                 self::assertStringContainsString(
                     "transaction opened on 'B'",
                     $failure(static fn () => $read($amb, 'default')),

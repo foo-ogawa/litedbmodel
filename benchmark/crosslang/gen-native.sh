@@ -8,8 +8,8 @@
 # `dialect` is sqlite | postgres | mysql; with none given ALL THREE are generated/checked (#156). Each
 # dialect has its OWN authored class (`BenchSqlite` / `BenchPostgres` / `BenchMysql`), and bc names the
 # generated namespace after the declaring class (bc#216) — so the three modules coexist without
-# colliding: go gets `package benchsqlite|benchpostgres|benchmysql`, rust three modules, python/php
-# three files each exposing its own class. The bench cell selects one at run time by target DB; there
+# colliding: go gets `package benchsqlite|benchpostgres|benchmysql`, rust three modules, python three
+# modules and php three files whose `require` returns their own class. The bench cell selects one at run time by target DB; there
 # is no dialect fallback (a cell asked for postgres runs the postgres module or fails loudly).
 #
 # There is NO litedbmodel code in the generation OR verification path. `native-model.ts` only DECLARES
@@ -89,12 +89,18 @@ run_dialect() {
   local ts_out="$ROOT/benchmark/crosslang/ts-cell/behaviors_$d.ts"
   local ts_flags=(--lang typescript-native --out "$ts_out")
 
-  # python / php — the LITERAL (ir-exec) twins, one file per dialect. Each exposes its own class
-  # (bc#216), so the three import side by side.
+  # python / php — the NATIVE emitters, one file per dialect. The transports are the python runtime's
+  # leaf module functions / the php runtime's Leaves static methods (the SAME symbol map as the
+  # conformance leg). A python module is its own namespace and a php module is the anonymous class its
+  # `require` returns, so the three import side by side.
   local py_out="$ROOT/python/orm_bench/behaviors_$d.py"
-  local py_flags=(--lang python --out "$py_out")
+  local py_flags=(--lang python-native --out "$py_out"
+    --leaf-transport executeSQL=execute_sql pluck=pluck_keys group=group_children
+    --leaf-transport-import litedbmodel_runtime.leaves)
   local php_out="$ROOT/php/orm_bench/behaviors_$d.php"
-  local php_flags=(--lang php --out "$php_out" --runtime-import 'LiteDbModel\Runtime\BehaviorContracts')
+  local php_flags=(--lang php-native --out "$php_out"
+    --leaf-transport executeSQL=executeSQL pluck=pluckKeys group=groupChildren
+    --leaf-transport-import 'LiteDbModel\Runtime\Leaves')
 
   if [ "$mode" = generate ]; then
     mkdir -p "$(dirname "$rust_out")" "$(dirname "$go_out")" "$(dirname "$ts_out")"
