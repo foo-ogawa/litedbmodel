@@ -17,7 +17,7 @@ import mysql from 'mysql2/promise';
 import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise';
 
 import type { Cell, Dialect, Recovery, RecoveryBind, Setup } from './cell.js';
-import { MYSQL_CONFIG, PG_CONFIG, resolveInput, setupFor } from './cell.js';
+import { keyedSelectSql, MYSQL_CONFIG, PG_CONFIG, resolveInput, setupFor } from './cell.js';
 
 type Row = Record<string, unknown>;
 
@@ -91,6 +91,19 @@ abstract class Db {
   async writeReturningId(sql: string, params: readonly unknown[], recovery: Recovery | null): Promise<number> {
     if (recovery === null) {
       const rows = await this.query(sql, params);
+      return Number(rows[0].id);
+    }
+    if (recovery.lockSql !== '') {
+      // An UPDATE (#361): lock and key its rows BEFORE the write, then recover the written rows by those
+      // keys. The lock read is below the runtime's seam, so it is neither counted nor tallied.
+      const locked = await this.fetch(recovery.lockSql, bindRecovery(recovery.lockBinds, params, { affected: 0 }));
+      await this.exec(recovery.writeSql, params);
+      if (locked.length === 0) throw new Error(`the UPDATE locked no row, so there is no id to return ('${recovery.writeSql.slice(0, 60)}…')`);
+      const keys = locked.flatMap((k) => recovery.keyCols.map((c) => k[c]));
+      const rows = await this.recoverRows(keyedSelectSql(recovery, locked.length), keys);
+      if (rows.length !== locked.length) {
+        throw new Error(`the UPDATE locked ${locked.length} row(s) but its recovery found ${rows.length} ('${recovery.writeSql.slice(0, 60)}…')`);
+      }
       return Number(rows[0].id);
     }
     const wrote = await this.exec(recovery.writeSql, params);

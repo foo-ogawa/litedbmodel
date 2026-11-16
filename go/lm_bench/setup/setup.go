@@ -50,12 +50,17 @@ type Bind struct {
 }
 
 // Recovery is one write's MySQL RETURNING recovery: run WriteSQL (the write with the RETURNING clause
-// and the /*scp:pk=…*/ hint removed), then fetch SelectSQL bound per Binds. Both together are ONE
-// logical statement — what the runtime's seam counts.
+// and the /*scp:pk=…*/ hint removed), then fetch SelectSQL bound per Binds. All of it is ONE logical
+// statement — what the runtime's seam counts. An UPDATE's (LockSQL non-empty) runs LockSQL bound per
+// LockBinds BEFORE the write and recovers the written rows by the KeyCols it locked (#361) — the
+// OpRecovery of benchmark/crosslang/derive-ops.ts.
 type Recovery struct {
-	WriteSQL  string `json:"writeSql"`
-	SelectSQL string `json:"selectSql"`
-	Binds     []Bind `json:"binds"`
+	WriteSQL  string   `json:"writeSql"`
+	SelectSQL string   `json:"selectSql"`
+	Binds     []Bind   `json:"binds"`
+	LockSQL   string   `json:"lockSql"`
+	LockBinds []Bind   `json:"lockBinds"`
+	KeyCols   []string `json:"keyCols"`
 }
 
 // Recovery returns the recovery for statement i of op, or nil when the database executes the declared

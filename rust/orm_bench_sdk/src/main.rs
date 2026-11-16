@@ -93,6 +93,29 @@ struct Wrote {
     affected: u64,
 }
 
+/// An UPDATE recovery's `select_sql` completed for `rows` locked keys: one `(?, …)` tuple per row in
+/// `key_cols` order, then ` ORDER BY <key_cols>` — the `keyedSelectSql` of
+/// `src/scp/makesql/mysql-returning.ts`.
+fn keyed_select_sql(rec: &Recovery, rows: usize) -> String {
+    let tuple = format!("({})", vec!["?"; rec.key_cols.len()].join(", "));
+    format!(
+        "{}({}) ORDER BY {}",
+        rec.select_sql,
+        vec![tuple.as_str(); rows].join(", "),
+        rec.key_cols.join(", ")
+    )
+}
+
+/// A locked key value, bound back as a param of the keyed recovery (the lock read returns exactly
+/// `key_cols`, so a row binds as is).
+fn cell_param(c: &Cell) -> P {
+    match c {
+        Cell::I(n) => P::I(*n),
+        Cell::S(s) => P::S(s.clone()),
+        _ => panic!("a locked key is neither an integer nor a string"),
+    }
+}
+
 /// The recovering SELECT's params, from the write's own params and what the driver reported — the
 /// `bindReselect` of `src/scp/makesql/mysql-returning.ts`, where these kinds are defined. A kind the
 /// driver cannot answer is a HARD failure: recovering the wrong rows quietly is what this path removes.
@@ -144,6 +167,33 @@ trait Db {
             let rows = self.query(sql, params);
             return cell_i64(&rows[0][0]);
         };
+        if !rec.lock_sql.is_empty() {
+            // An UPDATE (#361): lock and key its rows BEFORE the write, then recover the written rows by
+            // those keys. The lock read is below the runtime's seam, so it is neither counted nor tallied.
+            let nothing = Wrote {
+                insert_id: None,
+                affected: 0,
+            };
+            let locked = self.fetch(
+                &rec.lock_sql,
+                &bind_recovery(&rec.lock_binds, params, &nothing),
+            );
+            self.exec(&rec.write_sql, params);
+            assert!(
+                !locked.is_empty(),
+                "the UPDATE locked no row, so there is no id to return ({:?})",
+                rec.write_sql
+            );
+            let keys: Vec<P> = locked.iter().flatten().map(cell_param).collect();
+            let rows = self.recover_rows(&keyed_select_sql(rec, locked.len()), &keys);
+            assert_eq!(
+                rows.len(),
+                locked.len(),
+                "the UPDATE's recovery found a different row count ({:?})",
+                rec.write_sql
+            );
+            return cell_i64(&rows[0][0]);
+        }
         let wrote = self.exec(&rec.write_sql, params);
         let bound = bind_recovery(&rec.binds, params, &wrote);
         let rows = self.recover_rows(&rec.select_sql, &bound);

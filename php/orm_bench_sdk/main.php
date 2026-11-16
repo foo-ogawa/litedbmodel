@@ -153,12 +153,27 @@ final class Db
      * recovers — so the rows are tallied and the statement count is not bumped a second time.
      *
      * @param list<mixed> $params
-     * @param array{writeSql:string,selectSql:string,binds:list<array{kind:string,index?:int}>}|null $recovery
+     * @param array{writeSql:string,selectSql:string,binds:list<array{kind:string,index?:int}>,lockSql:string,lockBinds:list<array{kind:string,index?:int}>,keyCols:list<string>}|null $recovery
      */
     public function writeReturningId(string $sql, array $params, ?array $recovery): int
     {
         if ($recovery === null) {
             return (int) $this->query($sql, $params)[0][0];
+        }
+        if ($recovery['lockSql'] !== '') {
+            // An UPDATE (#361): lock and key its rows BEFORE the write, then recover the written rows by
+            // those keys. The lock read is below the runtime's seam, so it is neither counted nor tallied.
+            $locked = $this->fetchRows($recovery['lockSql'], bindRecovery($recovery['lockBinds'], $params, ['insertId' => null, 'affected' => 0]));
+            $this->exec($recovery['writeSql'], $params);
+            if ($locked === []) {
+                throw new \RuntimeException("the UPDATE locked no row, so there is no id to return ({$recovery['writeSql']})");
+            }
+            $keys = array_merge(...$locked);
+            $rows = $this->recoverRows(keyedSelectSql($recovery, count($locked)), $keys);
+            if (count($rows) !== count($locked)) {
+                throw new \RuntimeException('the UPDATE locked ' . count($locked) . ' row(s) but its recovery found ' . count($rows) . " ({$recovery['writeSql']})");
+            }
+            return (int) $rows[0][0];
         }
         $wrote = $this->exec($recovery['writeSql'], $params);
         $bound = bindRecovery($recovery['binds'], $params, $wrote);
@@ -173,12 +188,24 @@ final class Db
      */
     private function recoverRows(string $sql, array $params): array
     {
+        $out = $this->fetchRows($sql, $params);
+        $this->rows += count($out);
+        return $out;
+    }
+
+    /**
+     * A fetch that counts nothing — the body of recoverRows, and on its own the lock read of an UPDATE's
+     * MySQL RETURNING recovery (below the runtime's seam).
+     *
+     * @param list<mixed> $params
+     * @return list<array<int,mixed>>
+     */
+    private function fetchRows(string $sql, array $params): array
+    {
         $stmt = $this->prep($sql);
         $this->bindAll($stmt, $params);
         $stmt->execute();
-        $out = $stmt->fetchAll(\PDO::FETCH_NUM);
-        $this->rows += count($out);
-        return $out;
+        return $stmt->fetchAll(\PDO::FETCH_NUM);
     }
 }
 
@@ -252,6 +279,19 @@ function pgArrayLiteral(array $values): string
         ? (string) $v
         : '"' . str_replace(['\\', '"'], ['\\\\', '\\"'], (string) $v) . '"';
     return '{' . implode(',', array_map($one, $values)) . '}';
+}
+
+/**
+ * An UPDATE recovery's selectSql completed for $rows locked keys: one `(?, …)` tuple per row in keyCols
+ * order, then ` ORDER BY <keyCols>` — the keyedSelectSql of src/scp/makesql/mysql-returning.ts. The lock
+ * read returns exactly keyCols, so a locked row binds as is.
+ *
+ * @param array{selectSql:string,keyCols:list<string>} $recovery
+ */
+function keyedSelectSql(array $recovery, int $rows): string
+{
+    $tuple = '(' . implode(', ', array_fill(0, count($recovery['keyCols']), '?')) . ')';
+    return $recovery['selectSql'] . '(' . implode(', ', array_fill(0, $rows, $tuple)) . ') ORDER BY ' . implode(', ', $recovery['keyCols']);
 }
 
 /**

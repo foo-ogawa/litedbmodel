@@ -113,6 +113,19 @@ class Db:
         """
         if recovery is None:
             return int(self.query(sql, params)[0][0])
+        if recovery["lockSql"]:
+            # An UPDATE (#361): lock and key its rows BEFORE the write, then recover the written rows by
+            # those keys. The lock read is below the runtime's seam, so it is neither counted nor tallied.
+            nothing = {"insert_id": None, "affected": 0}
+            locked = [tuple(r) for r in self._cursor(recovery["lockSql"], _bind_recovery(recovery["lockBinds"], params, nothing)).fetchall()]
+            self.exec(recovery["writeSql"], params)
+            if not locked:
+                raise RuntimeError(f"the UPDATE locked no row, so there is no id to return ({recovery['writeSql'][:60]!r})")
+            keys = tuple(v for row in locked for v in row)
+            rows = self._recover_rows(_keyed_select_sql(recovery, len(locked)), keys)
+            if len(rows) != len(locked):
+                raise RuntimeError(f"the UPDATE locked {len(locked)} row(s) but its recovery found {len(rows)} ({recovery['writeSql'][:60]!r})")
+            return int(rows[0][0])
         wrote = self.exec(recovery["writeSql"], params)
         bound = _bind_recovery(recovery["binds"], params, wrote)
         return int(self._recover_rows(recovery["selectSql"], bound)[0][0])
@@ -128,6 +141,14 @@ class Db:
         # param-free control statement (BEGIN / COMMIT)
         self.count += 1
         self._cursor(sql, ())
+
+
+def _keyed_select_sql(recovery: Dict[str, Any], rows: int) -> str:
+    """An UPDATE recovery's ``selectSql`` completed for ``rows`` locked keys: one ``(?, …)`` tuple per row in
+    ``keyCols`` order, then `` ORDER BY <keyCols>`` — the ``keyedSelectSql`` of
+    ``src/scp/makesql/mysql-returning.ts``. The lock read returns exactly ``keyCols``, so a row binds as is."""
+    tuple_ = "(" + ", ".join("?" for _ in recovery["keyCols"]) + ")"
+    return f"{recovery['selectSql']}({', '.join(tuple_ for _ in range(rows))}) ORDER BY {', '.join(recovery['keyCols'])}"
 
 
 def _bind_recovery(binds: List[Dict[str, Any]], params: tuple, wrote: Dict[str, Any]) -> tuple:

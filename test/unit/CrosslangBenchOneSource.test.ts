@@ -137,30 +137,34 @@ describe('cross-lang bench: the MySQL RETURNING recovery is derived, never copie
     const statements = mysqlStatements();
     expect(statements.length, 'the committed mysql module should carry statements').toBeGreaterThan(0);
 
-    // An UPDATE…RETURNING is recovered by locking and keying its rows BEFORE the write (#361), which no
-    // cell implements yet: deriving it must refuse LOUDLY rather than hand the cells a recovery they would
-    // run in the wrong order.
-    const isUpdate = (s: string): boolean => /^UPDATE\b/i.test(s) && /\bRETURNING\b/i.test(s);
-    const updates = statements.filter(isUpdate);
-    expect(updates.length, 'the committed mysql module should carry an UPDATE…RETURNING').toBeGreaterThan(0);
-    for (const u of updates) expect(() => derive({ all: [u] }, 'mysql')).toThrow(/must lock and key its rows BEFORE its write/);
-
-    const { recover } = derive({ all: statements.filter((s) => !isUpdate(s)) }, 'mysql');
+    const { recover } = derive({ all: statements }, 'mysql');
     const derived = (recover.all ?? []).filter((r) => r !== null).map((r) => ({ ...r! }));
 
-    // The recoveries `src/scp/makesql/mysql-returning.ts` builds for this model's INSERT RETURNING writes.
-    // A change there that the cells would silently stop matching turns this red.
+    // The recoveries `src/scp/makesql/mysql-returning.ts` builds for this model's RETURNING writes. An
+    // UPDATE…RETURNING is recovered by locking and keying its rows BEFORE the write (#361), which every
+    // cell runs in that order. A change there that the cells would silently stop matching turns this red.
+    const none = { lockSql: '', lockBinds: [], keyCols: [] };
     expect(derived).toEqual([
       {
         writeSql:
           'INSERT INTO benchmark_users (email, name) VALUES (?, ?) ON DUPLICATE KEY UPDATE email = VALUES(email), name = VALUES(name)',
         selectSql: 'SELECT id FROM benchmark_users WHERE email = ? ORDER BY id',
         binds: [{ kind: 'param', index: 0 }],
+        ...none,
       },
       {
         writeSql: 'INSERT INTO benchmark_users (email, name) VALUES (?, ?)',
         selectSql: 'SELECT id FROM benchmark_users WHERE id >= ? AND id < ? ORDER BY id',
         binds: [{ kind: 'lastId' }, { kind: 'highId' }],
+        ...none,
+      },
+      {
+        writeSql: 'UPDATE benchmark_users SET name = ? WHERE id = ?',
+        selectSql: 'SELECT id FROM benchmark_users WHERE (id) IN ',
+        binds: [],
+        lockSql: 'SELECT id FROM benchmark_users WHERE id = ? ORDER BY id FOR UPDATE',
+        lockBinds: [{ kind: 'param', index: 1 }],
+        keyCols: ['id'],
       },
     ]);
   });

@@ -125,11 +125,27 @@ export type InputValue = string | number | readonly Record<string, string | numb
 /** How ONE `?` of a recovering SELECT is bound — the vocabulary of `ReselectBind`. */
 export type RecoveryBind = { kind: 'param'; index: number } | { kind: 'lastId' } | { kind: 'highId' };
 
-/** A write's MySQL RETURNING recovery: run `writeSql`, then fetch `selectSql` bound per `binds`. */
+/**
+ * A write's MySQL RETURNING recovery: run `writeSql`, then fetch `selectSql` bound per `binds`. An
+ * UPDATE's (`lockSql` non-empty) runs `lockSql` bound per `lockBinds` BEFORE the write and recovers the
+ * written rows by the keys it locked ({@link keyedSelectSql}) — the `OpRecovery` of `derive-ops.ts`.
+ */
 export interface Recovery {
   readonly writeSql: string;
   readonly selectSql: string;
   readonly binds: readonly RecoveryBind[];
+  readonly lockSql: string;
+  readonly lockBinds: readonly RecoveryBind[];
+  readonly keyCols: readonly string[];
+}
+
+/**
+ * An UPDATE recovery's `selectSql` completed for `rows` locked keys: one `(?, …)` tuple per row in
+ * `keyCols` order, then ` ORDER BY <keyCols>` — the `keyedSelectSql` of `src/scp/makesql/mysql-returning.ts`.
+ */
+export function keyedSelectSql(recovery: Recovery, rows: number): string {
+  const tuple = `(${recovery.keyCols.map(() => '?').join(', ')})`;
+  return `${recovery.selectSql}(${Array.from({ length: rows }, () => tuple).join(', ')}) ORDER BY ${recovery.keyCols.join(', ')}`;
 }
 
 /**
