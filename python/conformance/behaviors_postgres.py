@@ -258,7 +258,7 @@ def posts_by_ids(ids):
     return t_n0
 
 
-def feed(authorId, status, since):
+def feed(authorId, status=None, since=None):
     t_n0 = None
     produced_n0 = False
     # op 'n0' (executeSQL)
@@ -342,7 +342,7 @@ def paged_feed(authorId, minId, status, limit, offset):
     return t_n0
 
 
-def optional_only_feed(authorId, status):
+def optional_only_feed(authorId=None, status=None):
     t_n0 = None
     produced_n0 = False
     # op 'n0' (executeSQL)
@@ -421,7 +421,7 @@ def quoted_order_feed(authorId, minId, limit):
     return t_n0
 
 
-def quoted_where_order_feed(status):
+def quoted_where_order_feed(status=None):
     t_n0 = None
     produced_n0 = False
     # op 'n0' (executeSQL)
@@ -458,7 +458,7 @@ def quoted_where_order_feed(status):
     return t_n0
 
 
-def view_feed(status):
+def view_feed(status=None):
     t_n0 = None
     produced_n0 = False
     # op 'n0' (executeSQL)

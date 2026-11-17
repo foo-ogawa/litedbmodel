@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
-## [2.3.0] - 2026-11-16
+## [2.3.0] - 2026-11-17
 
 **python / php の生成モジュールを native のコードに切り替えた。** 生成モジュールは behavior-contracts の
 `python-native` / `php-native` の出力で、IR を持たず、リーフ転送を直接呼ぶ。python / php の runtime は

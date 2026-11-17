@@ -231,7 +231,7 @@ namespace {
             return $t_n0;
         }
 
-        public static function feed(mixed $authorId, mixed $status, mixed $since): mixed
+        public static function feed(mixed $authorId, mixed $status = null, mixed $since = null): mixed
         {
             $t_n0 = null;
             $produced_n0 = false;
@@ -333,7 +333,7 @@ namespace {
             return $t_n0;
         }
 
-        public static function optionalOnlyFeed(mixed $authorId, mixed $status): mixed
+        public static function optionalOnlyFeed(mixed $authorId = null, mixed $status = null): mixed
         {
             $t_n0 = null;
             $produced_n0 = false;
@@ -429,7 +429,7 @@ namespace {
             return $t_n0;
         }
 
-        public static function quotedWhereOrderFeed(mixed $status): mixed
+        public static function quotedWhereOrderFeed(mixed $status = null): mixed
         {
             $t_n0 = null;
             $produced_n0 = false;
@@ -474,7 +474,7 @@ namespace {
             return $t_n0;
         }
 
-        public static function viewFeed(mixed $status): mixed
+        public static function viewFeed(mixed $status = null): mixed
         {
             $t_n0 = null;
             $produced_n0 = false;
