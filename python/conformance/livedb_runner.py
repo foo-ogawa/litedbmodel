@@ -8,9 +8,9 @@ runtime's op-agnostic leaf transports directly. Nothing is replayed from a seria
 
 The only hand-wiring is what makes the generated entry callable — bind the leaf transport to a live
 connection around the call, and call the entry (the authored method, snake_case) with the vector's
-input as its keyword arguments::
+input bound to its parameters by name (:func:`_call`)::
 
-    with_leaf_transport(driver, dialect, lambda: behaviors.posts_by_ids(**vector["input"]))
+    with_leaf_transport(driver, dialect, lambda: _call(behaviors.posts_by_ids, vector["input"]))
 
 Every vector is then compared against what the TS leg observed on the SAME server for the SAME
 dialect (``conformance/vectors-livedb/livedb.json``, projected from the frozen exec suite): the
@@ -33,6 +33,7 @@ Exit: 0 all pass, 1 any fail, 2 corpus-version mismatch, 3 DB unreachable.
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 import os
 import sys
@@ -180,10 +181,21 @@ def _entry(module: Any, name: str) -> Callable[..., Any]:
     return getattr(module, re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name).lower())
 
 
+def _call(entry: Callable[..., Any], inp: Dict[str, Any]) -> Any:
+    """``entry`` called with the vector's input bound to its parameters by name. The corpus writes no
+    value for a null argument, so a parameter the input leaves out is passed as None — as the go
+    runner reads it (``optI64`` / ``optStr``). Input the entry does not declare is an error."""
+    params = inspect.signature(entry).parameters
+    extra = sorted(set(inp) - set(params))
+    if extra:
+        raise TypeError(f"{entry.__name__}() does not declare the input {extra}")
+    return entry(**{name: inp.get(name) for name in params})
+
+
 def _run_vector(module: Any, dialect: str, driver: Any, tap: _TapDriver, v: Dict[str, Any]) -> Tuple[bool, str]:
     del tap.log[:]
     entry = _entry(module, v["entry"])
-    result = with_leaf_transport(tap, dialect, lambda: entry(**v["input"]))
+    result = with_leaf_transport(tap, dialect, lambda: _call(entry, v["input"]))
     problems: List[str] = []
     if not _eq(tap.log, v["expectedStatements"]):
         problems.append(f"statements {_dumps(tap.log)} != {_dumps(v['expectedStatements'])}")

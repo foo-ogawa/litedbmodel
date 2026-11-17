@@ -12,9 +12,9 @@ declare(strict_types=1);
  *
  * The only hand-wiring is what makes the generated entry callable — bind the leaf transport to a live PDO
  * around the call, and call the entry (a static method of the anonymous class `require` returns) with the
- * vector's input as its named arguments:
+ * vector's input bound to its parameters by name ({@see callEntry()}):
  *
- *     Leaves::withTransport($pdo, $dialect, fn () => [$mod, $vector['entry']](...(array) $vector['input']));
+ *     Leaves::withTransport($pdo, $dialect, fn () => callEntry($mod, $vector['entry'], (array) $vector['input']));
  *
  * Every vector is compared against what the TS leg observed on the SAME server for the SAME dialect
  * (`conformance/vectors-livedb/livedb.json`): the ORDERED statements the leaf handed the driver, the
@@ -156,15 +156,36 @@ function loadGenerated(string $root, string $dialect): object
 // ── one leg ───────────────────────────────────────────────────────────────────
 
 /**
+ * The entry `$name` of `$mod` called with the vector's input bound to its parameters by name. The corpus
+ * writes no value for a null argument, so a parameter the input leaves out is passed as null — as the go
+ * runner reads it (`optI64` / `optStr`). Input the entry does not declare is an error.
+ *
+ * @param array<string, mixed> $input
+ */
+function callEntry(object $mod, string $name, array $input): mixed
+{
+    $params = array_map(static fn (\ReflectionParameter $p): string => $p->getName(), (new \ReflectionMethod($mod, $name))->getParameters());
+    $extra = array_values(array_diff(array_keys($input), $params));
+    if ($extra !== []) {
+        throw new \TypeError("{$name}() does not declare the input " . json_encode($extra));
+    }
+    $args = [];
+    foreach ($params as $param) {
+        $args[$param] = $input[$param] ?? null;
+    }
+    return [$mod, $name](...$args);
+}
+
+/**
  * @param array<string, mixed> $vector
  * @return array{0: bool, 1: string}
  */
 function runVector(object $mod, string $dialect, \PDO $pdo, array $vector): array
 {
     $GLOBALS['STATEMENT_LOG'] = [];
-    $entry = [$mod, (string) $vector['entry']];
+    $name = (string) $vector['entry'];
     $input = (array) $vector['input'];
-    $result = Leaves::withTransport($pdo, $dialect, static fn (): mixed => $entry(...$input));
+    $result = Leaves::withTransport($pdo, $dialect, static fn (): mixed => callEntry($mod, $name, $input));
     $problems = [];
     $expectedStatements = expectedStatementsFor((string) $vector['dialect'], $vector['expectedStatements']);
     if (!valuesEqual($GLOBALS['STATEMENT_LOG'], $expectedStatements)) {
