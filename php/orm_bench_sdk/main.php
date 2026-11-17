@@ -152,14 +152,35 @@ final class Db
      * counts a MySQL RETURNING write as one (its recovery runs below the seam) while counting the row it
      * recovers — so the rows are tallied and the statement count is not bumped a second time.
      *
+     * Outside a transaction ($inTx false) the runtime runs the recovery's steps in a BEGIN … COMMIT of
+     * their own (`php/src/LiveDb.php`), below its seam: so does the baseline, uncounted.
+     *
      * @param list<mixed> $params
      * @param array{writeSql:string,selectSql:string,binds:list<array{kind:string,index?:int}>,lockSql:string,lockBinds:list<array{kind:string,index?:int}>,keyCols:list<string>}|null $recovery
      */
-    public function writeReturningId(string $sql, array $params, ?array $recovery): int
+    public function writeReturningId(string $sql, array $params, ?array $recovery, bool $inTx): int
     {
         if ($recovery === null) {
             return (int) $this->query($sql, $params)[0][0];
         }
+        if (!$inTx) {
+            $this->pdo->exec('BEGIN');
+        }
+        $id = $this->recoveredId($params, $recovery);
+        if (!$inTx) {
+            $this->pdo->exec('COMMIT');
+        }
+        return $id;
+    }
+
+    /**
+     * The steps of a MySQL RETURNING recovery ({@see writeReturningId()}), on the current transaction.
+     *
+     * @param list<mixed> $params
+     * @param array{writeSql:string,selectSql:string,binds:list<array{kind:string,index?:int}>,lockSql:string,lockBinds:list<array{kind:string,index?:int}>,keyCols:list<string>} $recovery
+     */
+    private function recoveredId(array $params, array $recovery): int
+    {
         if ($recovery['lockSql'] !== '') {
             // An UPDATE (#361): lock and key its rows BEFORE the write, then recover the written rows by
             // those keys. The lock read is below the runtime's seam, so it is neither counted nor tallied.
@@ -589,7 +610,7 @@ function runOp(Db $db, array $doc, string $op, int $it): void
             break;
         case 'upsert':
             // The captured statement declares ` RETURNING id`, so the baseline reads the id back too.
-            $sink = $db->writeReturningId($sqlList[0], [$inp['email'], $inp['name']], $rec(0));
+            $sink = $db->writeReturningId($sqlList[0], [$inp['email'], $inp['name']], $rec(0), false);
             unset($sink);
             break;
         case 'createMany':
@@ -600,13 +621,13 @@ function runOp(Db $db, array $doc, string $op, int $it): void
             break;
         case 'nestedCreate':
             $db->execRaw('BEGIN');
-            $uid = $db->writeReturningId($sqlList[0], [$inp['email'], $inp['name']], $rec(0));
+            $uid = $db->writeReturningId($sqlList[0], [$inp['email'], $inp['name']], $rec(0), true);
             $db->exec($sqlList[1], [$uid, $inp['title']]);
             $db->execRaw('COMMIT');
             break;
         case 'nestedUpsert':
             $db->execRaw('BEGIN');
-            $uid = $db->writeReturningId($sqlList[0], [$inp['email'], $inp['name']], $rec(0));
+            $uid = $db->writeReturningId($sqlList[0], [$inp['email'], $inp['name']], $rec(0), true);
             $db->exec($sqlList[1], [$uid, $inp['title']]);
             $db->execRaw('COMMIT');
             break;
@@ -614,13 +635,13 @@ function runOp(Db $db, array $doc, string $op, int $it): void
             $db->execRaw('BEGIN');
             // The generated runner chains the dependent UPDATE off the id the first UPDATE returned; taking
             // the id from the input instead would skip a statement's worth of work.
-            $uid = $db->writeReturningId($sqlList[0], [$inp['name'], $inp['id']], $rec(0));
+            $uid = $db->writeReturningId($sqlList[0], [$inp['name'], $inp['id']], $rec(0), true);
             $db->exec($sqlList[1], [$inp['title'], $uid]);
             $db->execRaw('COMMIT');
             break;
         case 'delete':
             $db->execRaw('BEGIN');
-            $uid = $db->writeReturningId($sqlList[0], [$inp['email'], $inp['name']], $rec(0));
+            $uid = $db->writeReturningId($sqlList[0], [$inp['email'], $inp['name']], $rec(0), true);
             $db->exec($sqlList[1], [$uid]);
             $db->execRaw('COMMIT');
             break;

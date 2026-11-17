@@ -72,7 +72,12 @@ abstract class Db {
     return out;
   }
   protected abstract fetch(sql: string, params: readonly unknown[]): Promise<Row[]>;
-  abstract exec(sql: string, params?: readonly unknown[]): Promise<WriteResult>;
+  /** The ONE counted write seam, the twin of {@link query}. Subclasses supply only the driver call ({@link run}). */
+  async exec(sql: string, params: readonly unknown[] = []): Promise<WriteResult> {
+    this.count++;
+    return this.run(sql, params);
+  }
+  protected abstract run(sql: string, params: readonly unknown[]): Promise<WriteResult>;
   abstract close(): Promise<void>;
 
   /**
@@ -87,12 +92,23 @@ abstract class Db {
    * instead of a hand-copied guess at it. The recovery belongs to the SAME logical statement — the
    * runtime's seam counts a MySQL RETURNING write as one and issues the recovery below itself — so its
    * rows are tallied and the statement count is not bumped a second time.
+   *
+   * Outside a transaction (`inTx` false) the runtime runs the recovery's steps in a BEGIN … COMMIT of their
+   * own (`src/scp/makesql/pool-executor.ts`), below its seam: so does the baseline, uncounted.
    */
-  async writeReturningId(sql: string, params: readonly unknown[], recovery: Recovery | null): Promise<number> {
+  async writeReturningId(sql: string, params: readonly unknown[], recovery: Recovery | null, inTx: boolean): Promise<number> {
     if (recovery === null) {
       const rows = await this.query(sql, params);
       return Number(rows[0].id);
     }
+    if (!inTx) await this.run('BEGIN', []);
+    const id = await this.recoveredId(params, recovery);
+    if (!inTx) await this.run('COMMIT', []);
+    return id;
+  }
+
+  /** The steps of a MySQL RETURNING recovery ({@link writeReturningId}), on the current transaction. */
+  private async recoveredId(params: readonly unknown[], recovery: Recovery): Promise<number> {
     if (recovery.lockSql !== '') {
       // An UPDATE (#361): lock and key its rows BEFORE the write, then recover the written rows by those
       // keys. The lock read is below the runtime's seam, so it is neither counted nor tallied.
@@ -132,8 +148,7 @@ class SqliteDb extends Db {
   protected async fetch(sql: string, params: readonly unknown[]): Promise<Row[]> {
     return this.prep(sql).all(...(params as unknown[])) as Row[];
   }
-  async exec(sql: string, params: readonly unknown[] = []): Promise<WriteResult> {
-    this.count++;
+  protected async run(sql: string, params: readonly unknown[]): Promise<WriteResult> {
     if (params.length === 0 && /^\s*(BEGIN|COMMIT|ROLLBACK)/i.test(sql)) {
       this.db.exec(sql);
       return { affected: 0 };
@@ -156,8 +171,7 @@ class PgDb extends Db {
     const r = await this.pool.query({ text: this.render(sql), values: params as unknown[], name: cacheName(sql) });
     return r.rows as Row[];
   }
-  async exec(sql: string, params: readonly unknown[] = []): Promise<WriteResult> {
-    this.count++;
+  protected async run(sql: string, params: readonly unknown[]): Promise<WriteResult> {
     const r = await this.pool.query({ text: this.render(sql), values: params as unknown[], name: cacheName(sql) });
     // No `insertId`: PostgreSQL has no last-insert-id, and it never needs one — it executes the
     // declared RETURNING itself, so no statement of its artifact carries a recovery.
@@ -176,8 +190,7 @@ class MysqlDb extends Db {
     const [rows] = await this.pool.execute<RowDataPacket[]>(sql, params as never[]); // `execute` = server-side prepared + cached
     return rows as Row[];
   }
-  async exec(sql: string, params: readonly unknown[] = []): Promise<WriteResult> {
-    this.count++;
+  protected async run(sql: string, params: readonly unknown[]): Promise<WriteResult> {
     const [header] =
       params.length === 0
         ? await this.pool.query<ResultSetHeader>(sql)
@@ -390,7 +403,7 @@ async function runOp(db: Db, setup: Setup, op: string, it: number): Promise<void
       return;
     case 'upsert':
       // The generated statement declares ` RETURNING id`, so the baseline reads the id back too.
-      sink = await db.writeReturningId(sql[0], [input.email, input.name], recovery(0));
+      sink = await db.writeReturningId(sql[0], [input.email, input.name], recovery(0), false);
       return;
     case 'createMany':
     case 'upsertMany':
@@ -401,14 +414,14 @@ async function runOp(db: Db, setup: Setup, op: string, it: number): Promise<void
       return;
     case 'nestedCreate': {
       await db.exec('BEGIN');
-      const uid = await db.writeReturningId(sql[0], [input.email, input.name], recovery(0));
+      const uid = await db.writeReturningId(sql[0], [input.email, input.name], recovery(0), true);
       await db.exec(sql[1], [uid, input.title]);
       await db.exec('COMMIT');
       return;
     }
     case 'nestedUpsert': {
       await db.exec('BEGIN');
-      const uid = await db.writeReturningId(sql[0], [input.email, input.name], recovery(0));
+      const uid = await db.writeReturningId(sql[0], [input.email, input.name], recovery(0), true);
       await db.exec(sql[1], [uid, input.title]);
       await db.exec('COMMIT');
       return;
@@ -417,14 +430,14 @@ async function runOp(db: Db, setup: Setup, op: string, it: number): Promise<void
       await db.exec('BEGIN');
       // The generated runner chains the dependent UPDATE off the id the first UPDATE returned; taking the
       // id from the input instead would skip a statement's worth of work.
-      const uid = await db.writeReturningId(sql[0], [input.name, input.id], recovery(0));
+      const uid = await db.writeReturningId(sql[0], [input.name, input.id], recovery(0), true);
       await db.exec(sql[1], [input.title, uid]);
       await db.exec('COMMIT');
       return;
     }
     case 'delete': {
       await db.exec('BEGIN');
-      const uid = await db.writeReturningId(sql[0], [input.email, input.name], recovery(0));
+      const uid = await db.writeReturningId(sql[0], [input.email, input.name], recovery(0), true);
       await db.exec(sql[1], [uid]);
       await db.exec('COMMIT');
       return;

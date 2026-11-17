@@ -125,6 +125,17 @@ func (c *cell) stmt(sqlText string) *sql.Stmt {
 // put BEGIN and COMMIT on the wire, so the statement count is unchanged at 4.
 func (c *cell) begin() {
 	c.count++
+	c.beginTx()
+}
+
+func (c *cell) commit() {
+	c.count++
+	c.commitTx()
+}
+
+// beginTx / commitTx are begin / commit without the count: the bracket the runtime puts around a MySQL
+// RETURNING recovery outside a transaction, below its seam ([cell.writeReturningID]).
+func (c *cell) beginTx() {
 	tx, err := c.db.Begin()
 	if err != nil {
 		panic(fmt.Sprintf("begin: %v", err))
@@ -132,8 +143,7 @@ func (c *cell) begin() {
 	c.tx = tx
 }
 
-func (c *cell) commit() {
-	c.count++
+func (c *cell) commitTx() {
 	if err := c.tx.Commit(); err != nil {
 		panic(fmt.Sprintf("commit: %v", err))
 	}
@@ -246,10 +256,17 @@ func bindRecovery(binds []setup.Bind, params []any, wrote writeResult) []any {
 // a hand-copied guess at it. The recovery is part of the SAME logical statement: the runtime's own seam
 // counts a MySQL RETURNING write as ONE (it issues the recovery below the seam) while counting the row
 // it recovers, so this tallies the rows without bumping the statement count a second time.
+//
+// Outside a transaction the runtime runs the recovery's steps in a BEGIN … COMMIT of their own
+// (litedbmodel_runtime livedb.go), below its seam: so does the baseline, uncounted.
 func (c *cell) writeReturningID(sqlText string, rec *setup.Recovery, args ...any) int64 {
 	if rec == nil {
 		rows := c.query(sqlText, args...)
 		return asInt(rows[0][0])
+	}
+	if c.tx == nil {
+		c.beginTx()
+		defer c.commitTx()
 	}
 	if rec.LockSQL != "" {
 		// An UPDATE (#361): lock and key its rows BEFORE the write, then recover the written rows by

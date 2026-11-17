@@ -150,7 +150,13 @@ trait Db {
         out
     }
     fn fetch(&mut self, sql: &str, params: &[P]) -> Vec<Vec<Cell>>;
-    fn exec(&mut self, sql: &str, params: &[P]) -> Wrote;
+    /// The ONE counted write seam, the twin of [`Db::query`]. A driver supplies only its own run
+    /// ([`Db::run`]).
+    fn exec(&mut self, sql: &str, params: &[P]) -> Wrote {
+        QUERY_COUNT.fetch_add(1, Ordering::Relaxed);
+        self.run(sql, params)
+    }
+    fn run(&mut self, sql: &str, params: &[P]) -> Wrote;
 
     /// A write that hands back the id of the row it wrote — the ` RETURNING id` the authored native module
     /// declares for every id-chaining write (`benchmark/crosslang/native-model.ts`). The baseline issues the
@@ -162,11 +168,34 @@ trait Db {
     /// (`benchmark/crosslang/derive-ops.ts`). It belongs to the SAME logical statement — the runtime's seam
     /// counts a MySQL RETURNING write as one (its recovery runs below the seam) while counting the row it
     /// recovers — so the rows are tallied and the statement count is not bumped a second time.
-    fn write_returning_id(&mut self, sql: &str, params: &[P], recovery: Option<&Recovery>) -> i64 {
+    ///
+    /// Outside a transaction (`in_tx` false) the runtime runs the recovery's steps in a BEGIN … COMMIT of
+    /// their own (`litedbmodel_runtime` `my_all_on_conn`), below its seam: so does the baseline,
+    /// uncounted.
+    fn write_returning_id(
+        &mut self,
+        sql: &str,
+        params: &[P],
+        recovery: Option<&Recovery>,
+        in_tx: bool,
+    ) -> i64 {
         let Some(rec) = recovery else {
             let rows = self.query(sql, params);
             return cell_i64(&rows[0][0]);
         };
+        if !in_tx {
+            self.run("BEGIN", &[]);
+        }
+        let id = self.recovered_id(rec, params);
+        if !in_tx {
+            self.run("COMMIT", &[]);
+        }
+        id
+    }
+
+    /// The steps of a MySQL RETURNING recovery ([`Db::write_returning_id`]), on the connection's current
+    /// transaction.
+    fn recovered_id(&mut self, rec: &Recovery, params: &[P]) -> i64 {
         if !rec.lock_sql.is_empty() {
             // An UPDATE (#361): lock and key its rows BEFORE the write, then recover the written rows by
             // those keys. The lock read is below the runtime's seam, so it is neither counted nor tallied.
@@ -252,8 +281,7 @@ impl Db for SqliteDb {
             .expect("query");
         rows.map(|r| r.unwrap()).collect()
     }
-    fn exec(&mut self, sql: &str, params: &[P]) -> Wrote {
-        QUERY_COUNT.fetch_add(1, Ordering::Relaxed);
+    fn run(&mut self, sql: &str, params: &[P]) -> Wrote {
         if params.is_empty() {
             self.conn
                 .execute_batch(sql)
@@ -430,8 +458,7 @@ impl Db for PgDb {
             .map(pg_decode)
             .collect()
     }
-    fn exec(&mut self, sql: &str, params: &[P]) -> Wrote {
-        QUERY_COUNT.fetch_add(1, Ordering::Relaxed);
+    fn run(&mut self, sql: &str, params: &[P]) -> Wrote {
         if params.is_empty() {
             // BEGIN/COMMIT + param-free seed statements: run outside the extended protocol.
             self.client
@@ -503,9 +530,8 @@ impl Db for MyDb {
             .unwrap_or_else(|e| panic!("query `{sql}`: {e}"));
         rows.into_iter().map(my_decode).collect()
     }
-    fn exec(&mut self, sql: &str, params: &[P]) -> Wrote {
+    fn run(&mut self, sql: &str, params: &[P]) -> Wrote {
         use mysql::prelude::Queryable;
-        QUERY_COUNT.fetch_add(1, Ordering::Relaxed);
         if params.is_empty() {
             self.conn
                 .query_drop(sql)
@@ -746,6 +772,7 @@ fn run_op(op: &str, it: u64, db: &mut dyn Db, setup: &Setup) {
                 &sql[0],
                 &[P::S(text("email")), P::S(text("name"))],
                 rec(0).as_ref(),
+                false,
             );
         }
         "createMany" | "upsertMany" | "updateMany" => {
@@ -760,6 +787,7 @@ fn run_op(op: &str, it: u64, db: &mut dyn Db, setup: &Setup) {
                 &sql[0],
                 &[P::S(text("email")), P::S(text("name"))],
                 rec(0).as_ref(),
+                true,
             );
             db.exec(&sql[1], &[P::I(uid), P::S(text("title"))]);
             db.exec("COMMIT", &[]);
@@ -770,6 +798,7 @@ fn run_op(op: &str, it: u64, db: &mut dyn Db, setup: &Setup) {
                 &sql[0],
                 &[P::S(text("email")), P::S(text("name"))],
                 rec(0).as_ref(),
+                true,
             );
             db.exec(&sql[1], &[P::I(uid), P::S(text("title"))]);
             db.exec("COMMIT", &[]);
@@ -782,6 +811,7 @@ fn run_op(op: &str, it: u64, db: &mut dyn Db, setup: &Setup) {
                 &sql[0],
                 &[P::S(text("name")), P::I(int("id"))],
                 rec(0).as_ref(),
+                true,
             );
             db.exec(&sql[1], &[P::S(text("title")), P::I(uid)]);
             db.exec("COMMIT", &[]);
@@ -792,6 +822,7 @@ fn run_op(op: &str, it: u64, db: &mut dyn Db, setup: &Setup) {
                 &sql[0],
                 &[P::S(text("email")), P::S(text("name"))],
                 rec(0).as_ref(),
+                true,
             );
             db.exec(&sql[1], &[P::I(uid)]);
             db.exec("COMMIT", &[]);

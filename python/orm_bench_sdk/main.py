@@ -98,7 +98,7 @@ class Db:
         insert_id = getattr(cur, "lastrowid", None)
         return {"insert_id": insert_id, "affected": cur.rowcount if cur.rowcount is not None else 0}
 
-    def write_returning_id(self, sql: str, params: tuple, recovery: Optional[Dict[str, Any]]) -> int:
+    def write_returning_id(self, sql: str, params: tuple, recovery: Optional[Dict[str, Any]], in_tx: bool) -> int:
         """A write that hands back the id of the row it wrote — the `` RETURNING id`` the authored native
         module declares for every id-chaining write (``benchmark/crosslang/native-model.ts``). The baseline
         issues the SAME statement and reads the SAME row back, so the two surfaces do equal work.
@@ -110,9 +110,21 @@ class Db:
         statement — the runtime's seam counts a MySQL RETURNING write as one (its recovery runs below the
         seam) while counting the row it recovers — so the rows are tallied here and the statement count is
         not bumped a second time.
+
+        Outside a transaction (``in_tx`` false) the runtime runs the recovery's steps in a BEGIN … COMMIT of
+        their own (``litedbmodel_runtime`` ``driver.py``), below its seam: so does the baseline, uncounted.
         """
         if recovery is None:
             return int(self.query(sql, params)[0][0])
+        if not in_tx:
+            self._cursor("BEGIN", ())
+        rid = self._recovered_id(params, recovery)
+        if not in_tx:
+            self._cursor("COMMIT", ())
+        return rid
+
+    def _recovered_id(self, params: tuple, recovery: Dict[str, Any]) -> int:
+        """The steps of a MySQL RETURNING recovery (``write_returning_id``), on the current transaction."""
         if recovery["lockSql"]:
             # An UPDATE (#361): lock and key its rows BEFORE the write, then recover the written rows by
             # those keys. The lock read is below the runtime's seam, so it is neither counted nor tallied.
@@ -446,30 +458,30 @@ def run_op(db: Db, doc: Dict[str, Any], op: str, it: int) -> None:
         db.exec(sql[0], (inp["name"], inp["id"]))
     elif op == "upsert":
         # The captured statement declares ` RETURNING id`, so the baseline reads the id back too.
-        _SINK[0] = db.write_returning_id(sql[0], (inp["email"], inp["name"]), rec(0))
+        _SINK[0] = db.write_returning_id(sql[0], (inp["email"], inp["name"]), rec(0), False)
     elif op in ("createMany", "upsertMany", "updateMany"):
         # The SAME 10 records the native module writes, bound the way the statement asks for them.
         db.exec(sql[0], _batch_params(db, inp["rows"], sql[0], lm_bench_setup.batch_columns(doc, op)))
     elif op == "nestedCreate":
         db.exec_script("BEGIN")
-        uid = db.write_returning_id(sql[0], (inp["email"], inp["name"]), rec(0))
+        uid = db.write_returning_id(sql[0], (inp["email"], inp["name"]), rec(0), True)
         db.exec(sql[1], (uid, inp["title"]))
         db.exec_script("COMMIT")
     elif op == "nestedUpsert":
         db.exec_script("BEGIN")
-        uid = db.write_returning_id(sql[0], (inp["email"], inp["name"]), rec(0))
+        uid = db.write_returning_id(sql[0], (inp["email"], inp["name"]), rec(0), True)
         db.exec(sql[1], (uid, inp["title"]))
         db.exec_script("COMMIT")
     elif op == "nestedUpdate":
         db.exec_script("BEGIN")
         # The generated runner chains the dependent UPDATE off the id the first UPDATE returned; taking the
         # id from the input instead would skip a statement's worth of work.
-        uid = db.write_returning_id(sql[0], (inp["name"], inp["id"]), rec(0))
+        uid = db.write_returning_id(sql[0], (inp["name"], inp["id"]), rec(0), True)
         db.exec(sql[1], (inp["title"], uid))
         db.exec_script("COMMIT")
     elif op == "delete":
         db.exec_script("BEGIN")
-        uid = db.write_returning_id(sql[0], (inp["email"], inp["name"]), rec(0))
+        uid = db.write_returning_id(sql[0], (inp["email"], inp["name"]), rec(0), True)
         db.exec(sql[1], (uid,))
         db.exec_script("COMMIT")
     else:

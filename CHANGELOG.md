@@ -9,8 +9,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 **python / php の生成モジュールを native のコードに切り替えた。** 生成モジュールは behavior-contracts の
 `python-native` / `php-native` の出力で、IR を持たず、リーフ転送を直接呼ぶ。python / php の runtime は
-behavior-contracts に依存しない。behavior-contracts を 0.12.0 に更新した（5言語）。rust の MySQL で、文ごとに
-往復が1回多かった欠陥を修正した。Closes #387, #388, #389。
+behavior-contracts に依存しない。behavior-contracts を 0.12.0 に更新した（5言語）。rust の MySQL の接続プールを
+deadpool に替え、文ごとに加わっていた往復を無くした。あわせて、接続設定の値の扱い・MySQL の接続が切れたときの
+再試行・言語間ベンチの比較の欠陥を修正した。Closes #387, #388, #389, #390, #391, #392。
 
 ### Changed
 
@@ -43,6 +44,9 @@ behavior-contracts に依存しない。behavior-contracts を 0.12.0 に更新�
   作れなかった。`%` に続く16進2桁は、別の文字に置き換わっていた。値をエスケープせずに URL へ埋め込んで
   いたため、ユーザー名の `/` 以降が切り落とされ、別のホストに接続しようとすることもあった。rust は値を接続の
   設定に直接渡し、go は URL の各部分をエスケープする（#390）。
+- 言語間ベンチの SDK のセル（5言語）が、MySQL の単独の `upsert` で、runtime が読み直しを囲む BEGIN … COMMIT を
+  実行していなかった。MySQL の `upsert` の native/sdk の比が、全言語で 1.37〜2.77倍と大きく出ていた。修正後は
+  0.71〜1.19倍である（#392）。
 
 ### Removed
 
