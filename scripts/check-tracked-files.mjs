@@ -128,6 +128,7 @@ const ROOT_FILES = [
   '.gitignore',
   '.npmignore',
   '.npmrc',
+  '.nvmrc',
   'CHANGELOG.md',
   'CLAUDE.md',
   'Dockerfile.test',
