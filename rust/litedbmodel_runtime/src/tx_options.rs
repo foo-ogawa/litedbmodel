@@ -241,6 +241,9 @@ pub fn is_connection_error(error: &SqlFailure) -> bool {
         || m.contains("connection closed")
         || m.contains("connection was closed")
         || m.contains("pool has been closed")
+        // sqlx's I/O failure (`sqlx::Error::Io`): what the MySQL driver reports when the server's end
+        // of the connection is gone (EOF, reset, broken pipe).
+        || m.contains("error communicating with database")
         // PG SQLSTATE 57P01 admin_shutdown: the server ended this connection (pg_terminate_backend, a
         // shutdown, a failover) and answers the statement in flight with it before closing. The PG
         // driver embeds the SQLSTATE in the failure (`livedb.rs` `pg_err`).

@@ -31,6 +31,8 @@ behavior-contracts に依存しない。behavior-contracts を 0.12.0 に更新�
   約2倍の時間になっていた。接続を取り出すときは、PostgreSQL の接続プールと同じく、何も送らない（#389）。
 - 言語間ベンチの SDK のセルが、MySQL の `UPDATE … RETURNING` の lock-and-key に追随しておらず、
   `derive-ops` で停止していた（#388）。
+- rust の MySQL で、トランザクションの途中で接続が切れたときに、再試行せずにエラーを返していた。sqlx の I/O
+  エラー（`error communicating with database: …`）を、接続のエラーと判定していなかった（#391）。
 
 ### Removed
 
