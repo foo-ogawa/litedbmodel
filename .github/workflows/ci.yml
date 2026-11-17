@@ -27,7 +27,11 @@ jobs:
         # --audit-level=moderate` minus the dated exceptions listed in scripts/check-audit.mjs (none today).
         run: npm run audit:check
       - name: Verify npm signatures
-        run: npm audit signatures
+        # `audit:signatures` runs `npm audit signatures` with the npm version package.json pins, here
+        # and in release.yml / npm-audit-remediate.yml. Node 22's bundled npm 10 fails a package whose
+        # attestations response carries only the keyless provenance bundle (EMISSINGSIGNATUREKEY);
+        # npm 11 requires a registry key only for a keyed (publish) attestation.
+        run: npm run audit:signatures
       - name: Lint
         run: npm run lint --if-present
       - name: Spec references resolve
