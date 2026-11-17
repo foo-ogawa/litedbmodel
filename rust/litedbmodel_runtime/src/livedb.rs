@@ -1115,8 +1115,9 @@ impl MysqlDriver {
 
     /// Connect from a resolved Phase C [`ResolvedConnectionConfig`] — the [`PoolFactory`] path (#88):
     /// the pool SIZING (`max_pool` → `deadpool` pool size) is applied AT CONSTRUCTION so the config is
-    /// the SOLE source of the pool cap. Connection params flow from the config (assembled into the
-    /// `mysql://` URL).
+    /// the SOLE source of the pool cap. Connection params flow from the config, each set on the
+    /// connect options as it is — never through a URL, where `/ # ? % @ :` in a value would mean
+    /// something else.
     ///
     /// ## Honest per-driver deviations (documented, not silently dropped)
     ///   - **`min_pool`**: applied — unlike the TS mysql2 factory, which has none: `min_pool`
@@ -1137,18 +1138,18 @@ impl MysqlDriver {
             .enable_all()
             .build()
             .map_err(|e| driver_failure(format!("mysql runtime: {e}")))?;
-        let host = config
-            .host
-            .clone()
-            .unwrap_or_else(|| "127.0.0.1".to_string());
-        let port = config.port.unwrap_or(3306);
-        let user = config.user.clone().unwrap_or_default();
-        let password = config.password.clone().unwrap_or_default();
-        let database = config.database.clone().unwrap_or_default();
-        let url = format!("mysql://{user}:{password}@{host}:{port}/{database}");
-        let options = url
-            .parse::<MySqlConnectOptions>()
-            .map_err(|e| driver_failure(format!("mysql connect: {e}")))?;
+        let mut options = MySqlConnectOptions::new()
+            .host(config.host.as_deref().unwrap_or("127.0.0.1"))
+            .port(config.port.unwrap_or(3306));
+        if let Some(user) = config.user.as_deref().filter(|u| !u.is_empty()) {
+            options = options.username(user);
+        }
+        if let Some(password) = config.password.as_deref().filter(|p| !p.is_empty()) {
+            options = options.password(password);
+        }
+        if let Some(database) = config.database.as_deref().filter(|d| !d.is_empty()) {
+            options = options.database(database);
+        }
         Self::assemble(
             rt,
             options,
