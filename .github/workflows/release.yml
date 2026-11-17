@@ -56,7 +56,7 @@ jobs:
         run: npm run audit:check
       - name: Verify npm signatures
         if: steps.tag.outcome == 'failure'
-        run: npm audit signatures
+        run: npm run audit:signatures
       - name: Lint
         if: steps.tag.outcome == 'failure'
         run: npm run lint --if-present
