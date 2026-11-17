@@ -41,13 +41,33 @@ pub enum Bind {
 }
 
 /// One write's MySQL RETURNING recovery: run `write_sql` (the write with the RETURNING clause and the
-/// `/*scp:pk=…*/` hint removed), then fetch `select_sql` bound per `binds`. Both together are ONE
-/// logical statement — what the runtime's seam counts.
+/// `/*scp:pk=…*/` hint removed), then fetch `select_sql` bound per `binds`. All of it is ONE logical
+/// statement — what the runtime's seam counts. An UPDATE's (`lock_sql` non-empty) runs `lock_sql` bound
+/// per `lock_binds` BEFORE the write and recovers the written rows by the `key_cols` it locked (#361) —
+/// the `OpRecovery` of `benchmark/crosslang/derive-ops.ts`.
 #[derive(Clone, Debug)]
 pub struct Recovery {
     pub write_sql: String,
     pub select_sql: String,
     pub binds: Vec<Bind>,
+    pub lock_sql: String,
+    pub lock_binds: Vec<Bind>,
+    pub key_cols: Vec<String>,
+}
+
+/// One recovery's bind list (`binds` / `lockBinds`), in the vocabulary of [`Bind`].
+fn parse_binds(entry: &serde_json::Value, field: &str, op: &str, index: usize) -> Vec<Bind> {
+    entry[field]
+        .as_array()
+        .unwrap_or_else(|| panic!("recovery {op}[{index}]: `{field}` not an array"))
+        .iter()
+        .map(|b| match b["kind"].as_str() {
+            Some("param") => Bind::Param(b["index"].as_u64().expect("bind index") as usize),
+            Some("lastId") => Bind::LastId,
+            Some("highId") => Bind::HighId,
+            other => panic!("unknown recovery bind kind {other:?}"),
+        })
+        .collect()
 }
 
 impl Setup {
@@ -68,21 +88,18 @@ impl Setup {
         if entry.is_null() {
             return None;
         }
-        let binds = entry["binds"]
-            .as_array()
-            .unwrap_or_else(|| panic!("recovery {op}[{index}]: `binds` not an array"))
-            .iter()
-            .map(|b| match b["kind"].as_str() {
-                Some("param") => Bind::Param(b["index"].as_u64().expect("bind index") as usize),
-                Some("lastId") => Bind::LastId,
-                Some("highId") => Bind::HighId,
-                other => panic!("unknown recovery bind kind {other:?}"),
-            })
-            .collect();
         Some(Recovery {
             write_sql: entry["writeSql"].as_str().expect("writeSql").to_string(),
             select_sql: entry["selectSql"].as_str().expect("selectSql").to_string(),
-            binds,
+            binds: parse_binds(entry, "binds", op, index),
+            lock_sql: entry["lockSql"].as_str().expect("lockSql").to_string(),
+            lock_binds: parse_binds(entry, "lockBinds", op, index),
+            key_cols: entry["keyCols"]
+                .as_array()
+                .unwrap_or_else(|| panic!("recovery {op}[{index}]: `keyCols` not an array"))
+                .iter()
+                .map(|c| c.as_str().expect("key column name").to_string())
+                .collect(),
         })
     }
 

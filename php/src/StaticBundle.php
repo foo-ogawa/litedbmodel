@@ -8,7 +8,7 @@ namespace LiteDbModel\Runtime;
  * litedbmodel v2 SCP — the render-layer placeholder resolution (PHP, spec §8).
  *
  * The self-built `SqlBundle`/`ReadGraph` execution was deleted (#227): the only execution path is the
- * bc-generated native module bound to the leaf transport ({@see Leaves::makeHandlers}). What remains
+ * bc-generated `php-native` module calling the leaf transport ({@see Leaves::withTransport()}). What remains
  * here are the final render-layer helpers the leaf transport (`{@see Leaves}::executeSQL`) — and the
  * conformance runner's expected-value encoder — apply once a statement's SQL text AND its bound params
  * are final: resolve each deferred PG array-cast token from the array that fills it, encode a PG array

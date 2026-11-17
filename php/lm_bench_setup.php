@@ -69,7 +69,7 @@ function lm_bench_op_input(array $doc, string $op, int $it): array
  * RETURNING itself (every PostgreSQL and SQLite statement, and most MySQL ones).
  *
  * @param array<string,mixed> $doc
- * @return array{writeSql:string,selectSql:string,binds:list<array{kind:string,index?:int}>}|null
+ * @return array{writeSql:string,selectSql:string,binds:list<array{kind:string,index?:int}>,lockSql:string,lockBinds:list<array{kind:string,index?:int}>,keyCols:list<string>}|null
  */
 function lm_bench_recovery(array $doc, string $op, int $index): ?array
 {

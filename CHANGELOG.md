@@ -5,6 +5,56 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.3.0] - 2026-11-17
+
+**python / php の生成モジュールを native のコードに切り替えた。** 生成モジュールは behavior-contracts の
+`python-native` / `php-native` の出力で、IR を持たず、リーフ転送を直接呼ぶ。python / php の runtime は
+behavior-contracts に依存しない。behavior-contracts を 0.12.0 に更新した（5言語）。rust の MySQL の接続プールを
+deadpool に替え、文ごとに加わっていた往復を無くした。あわせて、接続設定の値の扱い・MySQL の接続が切れたときの
+再試行・言語間ベンチの比較の欠陥を修正した。Closes #387, #388, #389, #390, #391, #392。
+
+### Changed
+
+- python / php の conformance・ORM ベンチの生成モジュールを `--lang python-native` / `--lang php-native` で生成する。
+  実行時に IR を解釈しない。
+- python のリーフ転送は `litedbmodel_runtime.leaves` の `execute_sql` / `pluck_keys` / `group_children`、php は
+  `Leaves::executeSQL` / `Leaves::pluckKeys` / `Leaves::groupChildren` になった。実行コンテキストは呼び出しを
+  `with_leaf_transport(conn_or_ctx, dialect, fn)` / `Leaves::withTransport($pdoOrCtx, $dialect, $fn)` で囲んで束縛する。
+  python の束縛は `ContextVar` で、並列 stage の worker にも引き継がれる。
+- リーフの失敗（`SqlFailure`・`LimitExceededError`）は例外として送出し、生成モジュールが `OP_FAILED` の
+  `BehaviorError` に包む（元の例外を cause / previous に保持する）。
+- python のエントリは snake_case の関数名になった（引数は authored の名前のまま）。php のエントリは生成ファイルの
+  `require` が返すオブジェクトの static メソッドになった。
+- rust の MySQL の接続プールは、I/O エラーが起きた接続を、次に取り出すときに閉じる。
+- rust の MySQL の `min_pool` は、作成時に開く接続の数と、使われていない接続を閉じるときの下限である。
+  接続が切れて下限を下回ったときは、補充しない。
+- rust の MySQL の接続プールは、sqlx の既定の `max_lifetime`（30分を超えた接続の入れ替え）を行わない。
+  PostgreSQL の接続プールと同じである。
+
+### Fixed
+
+- rust の MySQL の接続プール（sqlx の `MySqlPool`）が、接続を取り出すとき・返すときに ping を送っていた。
+  1文の操作が、同じ文を実行する SDK の約2倍の時間になっていた。接続プールを PostgreSQL と同じ `deadpool` に
+  替え、接続を取り出すとき・返すときは何も送らない（#389）。
+- 言語間ベンチの SDK のセルが、MySQL の `UPDATE … RETURNING` の lock-and-key に追随しておらず、
+  `derive-ops` で停止していた（#388）。
+- rust の MySQL で、トランザクションの途中で接続が切れたときに、再試行せずにエラーを返していた。sqlx の I/O
+  エラー（`error communicating with database: …`）を、接続のエラーと判定していなかった（#391）。
+- 接続設定のユーザー名・パスワード・DB 名に `/` `#` `?` を含むと、rust の MySQL と go の PostgreSQL で接続を
+  作れなかった。`%` に続く16進2桁は、別の文字に置き換わっていた。値をエスケープせずに URL へ埋め込んで
+  いたため、ユーザー名の `/` 以降が切り落とされ、別のホストに接続しようとすることもあった。rust は値を接続の
+  設定に直接渡し、go は URL の各部分をエスケープする（#390）。
+- 言語間ベンチの SDK のセル（5言語）が、MySQL の単独の `upsert` で、runtime が読み直しを囲む BEGIN … COMMIT を
+  実行していなかった。MySQL の `upsert` の native/sdk の比が、全言語で 1.37〜2.77倍と大きく出ていた。修正後は
+  0.71〜1.19倍である（#392）。
+
+### Removed
+
+- python / php のリーフの handler 契約（`make_handlers` / `Leaves::makeHandlers`、`{"ok"|"error"}` の戻り値）。
+- python の `behavior-contracts` への依存（`pyproject.toml`）。
+- php の vendored な behavior-contracts（`php/src/BehaviorContracts/`）と、その同期スクリプト
+  （`scripts/vendor-behavior-contracts-php.mjs`、`npm run vendor:bc-php` / `vendor:bc-php:check`）。
+
 ## [2.2.15] - 2026-11-13
 
 **依存とセキュリティの更新、および全言語のセキュリティ監査で確認した欠陥の修正。** MySQL の RETURNING の emulation、

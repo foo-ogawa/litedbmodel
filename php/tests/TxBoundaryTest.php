@@ -8,7 +8,6 @@ use LiteDbModel\Runtime\ConnectionRegistry;
 use LiteDbModel\Runtime\Context;
 use LiteDbModel\Runtime\ExecutionContext;
 use LiteDbModel\Runtime\IsolationLevel;
-use LiteDbModel\Runtime\Leaves;
 use LiteDbModel\Runtime\PdoDriver;
 use LiteDbModel\Runtime\PlainPdoPool;
 use LiteDbModel\Runtime\RoutingConfig;
@@ -59,6 +58,8 @@ use function LiteDbModel\Runtime\withTransactionDecided;
  */
 final class TxBoundaryTest extends TestCase
 {
+    use RelationThroughLeavesTrait;
+
     private const TBL = 'scp_tx_boundary_php';
 
     private static function makeDriver(RecordingSink $sink): RecordingPdo
@@ -313,19 +314,18 @@ final class TxBoundaryTest extends TestCase
         $sinkB->reset();
         $ctxA = Context::forPdo($a);
         $ctxB = Context::forPdo($b);
-        $leafB = Leaves::makeHandlers($ctxB, 'sqlite')['executeSQL'];
-        $at = ['nodeId' => 'n0', 'component' => 'executeSQL'];
+        $leafB = self::boundLeaves($ctxB, 'sqlite')['executeSQL'];
         $select = 'SELECT id, worker FROM ' . self::TBL . ' ORDER BY id';
-        $rows = static fn (array $out): array => array_map(static fn ($r): array => [(int) $r->id, (int) $r->worker], $out['ok']);
+        $rows = static fn (array $out): array => array_map(static fn ($r): array => [(int) $r->id, (int) $r->worker], $out);
 
         $seen = null;
-        transaction($ctxA, function () use ($ctxB, $leafB, $at, $select, $rows, &$seen): void {
-            $seen = $rows($leafB(['sql' => $select, 'params' => []], $at));
+        transaction($ctxA, function () use ($ctxB, $leafB, $select, $rows, &$seen): void {
+            $seen = $rows($leafB(['sql' => $select, 'params' => []]));
             transaction($ctxB, static fn () => $leafB([
                 'sql' => self::INSERT_SQL,
                 'params' => [2, 2, 0],
                 'opts' => (object) ['db' => null, 'write' => (object) ['returning' => false], 'whereDynamic' => null, 'guard' => null],
-            ], $at), new TransactionOptions(retryOnError: false), 'sqlite');
+            ]), new TransactionOptions(retryOnError: false), 'sqlite');
         }, new TransactionOptions(retryOnError: false), 'sqlite');
 
         $this->assertSame([[1, 2]], $seen, "B's leaf must read B, not the open transaction on A");

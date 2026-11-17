@@ -2,16 +2,15 @@
 """litedbmodel SCP LIVE-DB conformance — the Python leg (#36 WS7g; leaf/emitter cutover #144).
 
 What runs here is the module bc GENERATED for this language from the SAME declaration the TS leg
-runs (``conformance/harness.ts`` → ``emitBehaviorModule`` → ``bc generate --lang python``, one module
-per live dialect, written by ``conformance/gen-livedb.ts``). Nothing is replayed from a serialized
-bundle: a leaf-executed module needs a LIVE in-process handle, which is exactly why the recorder-era
-bundle-replay model is gone.
+runs (``conformance/harness.ts`` → ``emitBehaviorModule`` → ``bc generate --lang python-native``, one
+module per live dialect, written by ``conformance/gen-livedb.ts``). The module is native: it calls the
+runtime's op-agnostic leaf transports directly. Nothing is replayed from a serialized bundle.
 
-The only hand-wiring is the two lines that make the generated module callable — bind the op-agnostic
-leaf transport to a live connection and call the endpoint by name::
+The only hand-wiring is what makes the generated entry callable — bind the leaf transport to a live
+connection around the call, and call the entry (the authored method, snake_case) with the vector's
+input bound to its parameters by name (:func:`_call`)::
 
-    ops = behaviors.bind(make_handlers(driver, dialect))
-    ops[vector["entry"]](vector["input"])
+    with_leaf_transport(driver, dialect, lambda: _call(behaviors.posts_by_ids, vector["input"]))
 
 Every vector is then compared against what the TS leg observed on the SAME server for the SAME
 dialect (``conformance/vectors-livedb/livedb.json``, projected from the frozen exec suite): the
@@ -34,11 +33,13 @@ Exit: 0 all pass, 1 any fail, 2 corpus-version mismatch, 3 DB unreachable.
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 import os
 import sys
 import traceback
 from pathlib import Path
+import re
 from typing import Any, Callable, Dict, List, Sequence, Tuple
 
 _HERE = Path(__file__).resolve().parent
@@ -47,7 +48,7 @@ _REPO = _PY_ROOT.parent
 if str(_PY_ROOT) not in sys.path:
     sys.path.insert(0, str(_PY_ROOT))
 
-from litedbmodel_runtime import MysqlDriver, PostgresDriver, make_handlers  # noqa: E402
+from litedbmodel_runtime import MysqlDriver, PostgresDriver, with_leaf_transport  # noqa: E402
 from litedbmodel_runtime.driver import RunInfo  # noqa: E402
 
 # The corpus schema version this leg supports (harness.CORPUS_VERSION — fail-closed on a mismatch).
@@ -159,7 +160,7 @@ class _TapDriver:
 
 
 def _load_generated(dialect: str) -> Any:
-    """Load ``python/conformance/behaviors_<dialect>.py`` — the module `bc generate --lang python`
+    """Load ``python/conformance/behaviors_<dialect>.py`` — the module `bc generate --lang python-native`
     produced from the harness declaration for this dialect."""
     path = _HERE / f"behaviors_{dialect}.py"
     if not path.exists():
@@ -175,9 +176,26 @@ def _load_generated(dialect: str) -> Any:
 # ── one leg ────────────────────────────────────────────────────────────────────────────────────
 
 
-def _run_vector(ops: Dict[str, Callable[..., Any]], driver: Any, tap: _TapDriver, v: Dict[str, Any]) -> Tuple[bool, str]:
+def _entry(module: Any, name: str) -> Callable[..., Any]:
+    """The generated entry of the authored method ``name`` — python-native names it in snake_case."""
+    return getattr(module, re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name).lower())
+
+
+def _call(entry: Callable[..., Any], inp: Dict[str, Any]) -> Any:
+    """``entry`` called with the vector's input bound to its parameters by name. The corpus writes no
+    value for a null argument, so a parameter the input leaves out is passed as None — as the go
+    runner reads it (``optI64`` / ``optStr``). Input the entry does not declare is an error."""
+    params = inspect.signature(entry).parameters
+    extra = sorted(set(inp) - set(params))
+    if extra:
+        raise TypeError(f"{entry.__name__}() does not declare the input {extra}")
+    return entry(**{name: inp.get(name) for name in params})
+
+
+def _run_vector(module: Any, dialect: str, driver: Any, tap: _TapDriver, v: Dict[str, Any]) -> Tuple[bool, str]:
     del tap.log[:]
-    result = ops[v["entry"]](dict(v["input"]))
+    entry = _entry(module, v["entry"])
+    result = with_leaf_transport(tap, dialect, lambda: _call(entry, v["input"]))
     problems: List[str] = []
     if not _eq(tap.log, v["expectedStatements"]):
         problems.append(f"statements {_dumps(tap.log)} != {_dumps(v['expectedStatements'])}")
@@ -195,13 +213,13 @@ def _run_leg(dialect: str, driver: Any, corpus: Dict[str, Any]) -> Dict[str, int
     tally = {"pass": 0, "fail": 0}
     sys.stderr.write(f"\nlivedb-{dialect} — {len(vectors)} vectors (real {dialect})\n")
     tap = _TapDriver(driver)
-    ops = _load_generated(dialect).bind(make_handlers(tap, dialect))
+    module = _load_generated(dialect)
     schema: List[str] = list(corpus["schema"])
     for v in vectors:
         try:
             # Every vector starts from the SAME seeded state the TS leg captured from.
             driver.exec_ddl(schema)
-            ok, detail = _run_vector(ops, driver, tap, v)
+            ok, detail = _run_vector(module, dialect, driver, tap, v)
         except Exception as e:  # a live-DB failure is a vector FAILURE, never a fake pass
             ok, detail = False, f"threw: {e}\n{traceback.format_exc()}"
         if ok:

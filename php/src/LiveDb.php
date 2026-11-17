@@ -8,7 +8,7 @@ namespace LiteDbModel\Runtime;
  * litedbmodel v2 SCP — LIVE PostgreSQL / MySQL PDO drivers (WS7g, #36).
  *
  * The PHP leg of the coordinated cross-language live-DB validation pass. The leaf transport
- * ({@see Leaves::makeHandlers}) handler seam already takes ANY `\PDO`; this file supplies two live `\PDO`
+ * binding ({@see Leaves::withTransport()}) already takes ANY `\PDO`; this file supplies two live `\PDO`
  * SUBCLASSES that adapt the two dialect divergences a raw PDO can't absorb, so the runtime stays
  * UNCHANGED:
  *

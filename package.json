@@ -1,6 +1,6 @@
 {
   "name": "litedbmodel",
-  "version": "2.2.15",
+  "version": "2.3.0",
   "description": "A lightweight TypeScript ORM for PostgreSQL, MySQL, and SQLite with Active Record pattern",
   "main": "dist/index.cjs",
   "types": "dist/index.d.ts",
@@ -63,8 +63,6 @@
     "tracked:check": "node scripts/check-tracked-files.mjs",
     "spec:check": "node scripts/check-spec-refs.mjs",
     "docs:bench:check": "node scripts/check-bench-docs.mjs",
-    "vendor:bc-php": "node scripts/vendor-behavior-contracts-php.mjs",
-    "vendor:bc-php:check": "node scripts/vendor-behavior-contracts-php.mjs --check",
     "go:dispatch:check": "LITEDBMODEL_LIVEDB_VECTORS=\"$PWD/conformance/vectors-livedb/livedb.json\" sh -c 'cd go && exec go run ./conformance/livedb --check-coverage'",
     "rust:dispatch:check": "LITEDBMODEL_LIVEDB_VECTORS=\"$PWD/conformance/vectors-livedb/livedb.json\" sh -c 'cd rust && exec cargo run --quiet -p livedb_runner --features livedb -- --check-coverage'",
     "conformance:dispatch:check": "npm run go:dispatch:check && npm run rust:dispatch:check",
@@ -98,7 +96,7 @@
     "url": "git+https://github.com/foo-ogawa/litedbmodel.git"
   },
   "dependencies": {
-    "behavior-contracts": "^0.11.22",
+    "behavior-contracts": "^0.12.0",
     "reflect-metadata": "^0.2.2"
   },
   "devDependencies": {

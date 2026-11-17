@@ -8,7 +8,6 @@ use LiteDbModel\Runtime\Connection;
 use LiteDbModel\Runtime\ConnectionRegistry;
 use LiteDbModel\Runtime\Context;
 use LiteDbModel\Runtime\ExecutionContext;
-use LiteDbModel\Runtime\Leaves;
 use LiteDbModel\Runtime\LogEntry;
 use LiteDbModel\Runtime\MethodKind;
 use LiteDbModel\Runtime\MiddlewareChain;
@@ -269,7 +268,7 @@ final class MiddlewareTest extends TestCase
                 return $next($sql, $params);
             }]));
             // Both statements of the relation, as the codegen path issues them: the three leaves.
-            $handlers = Leaves::makeHandlers($db, 'sqlite');
+            $handlers = self::boundLeaves($db, 'sqlite');
             return self::relationThroughLeaves($handlers, self::REL_PARENT_SQL, self::REL_CHILD_SQL, 'id', 'parent_id', 'kids');
         });
 
@@ -290,7 +289,7 @@ final class MiddlewareTest extends TestCase
         $db = self::relDb();
         $seen = [];
         // No middleware registered → both statements run as a byte-identical passthrough.
-        $handlers = Leaves::makeHandlers($db, 'sqlite');
+        $handlers = self::boundLeaves($db, 'sqlite');
         $grouped = self::relationThroughLeaves($handlers, self::REL_PARENT_SQL, self::REL_CHILD_SQL, 'id', 'parent_id', 'kids');
         // The read still WORKS (byte-identical) — 2 children loaded — but nothing was observed.
         $this->assertCount(2, $grouped[0]->kids);

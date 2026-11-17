@@ -12,12 +12,12 @@
 // like `path = "../litedbmodel_runtime"`, a package `exports` self-reference) is fine; only paths
 // that ESCAPE the repo root are flagged.
 //
-// The five language runtimes consume behavior-contracts from PUBLISHED coordinates only:
-//   npm  -> behavior-contracts@^0.2.0            (published)
-//   PyPI -> behavior-contracts==0.2.0            (published)
-//   crates.io -> behavior-contracts = "0.2.0"    (published)
-//   Go   -> github.com/foo-ogawa/behavior-contracts/go v0.2.0  (VCS tag; private repo, GOPRIVATE)
-//   PHP  -> VENDORED into php/src/BehaviorContracts (not a dep at all; drift-gated copy)
+// The language runtimes that depend on behavior-contracts consume it from PUBLISHED coordinates only:
+//   npm  -> behavior-contracts                   (published)
+//   crates.io -> behavior-contracts              (published)
+//   Go   -> github.com/foo-ogawa/behavior-contracts/go  (VCS tag; private repo, GOPRIVATE)
+// The python and php runtimes have no behavior-contracts dependency: their generated modules
+// (`python-native` / `php-native`) are runtime-free.
 //
 // Runs as a CI gate and a git pre-push hook. To intentionally keep a local sibling link during
 // development, set ALLOW_LOCAL_DEPS=1 (loud notice, exit 0).

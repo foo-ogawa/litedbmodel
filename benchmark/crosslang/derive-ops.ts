@@ -43,13 +43,23 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 /**
  * One statement's MySQL RETURNING recovery, as the cells execute it: run `writeSql` (the write with
  * the RETURNING clause and the `/*scp:pk=…* /` hint removed), then fetch `selectSql` bound per
- * {@link ReselectBind}. Both statements together are ONE logical statement — which is what the
- * runtime's seam counts, so a cell tallies the recovered rows without bumping its statement count.
+ * {@link ReselectBind}. All of it is ONE logical statement — which is what the runtime's seam counts,
+ * so a cell tallies the recovered rows without bumping its statement count.
+ *
+ * An UPDATE is recovered by lock-and-key (#361), in the order of `mysqlReturning`
+ * (`src/scp/makesql/pool-executor.ts`): run `lockSql` bound per `lockBinds` BEFORE the write — it locks
+ * the rows the write names and returns their `keyCols` — then the write, then `selectSql` completed by
+ * one `(?, …)` tuple per locked row and ` ORDER BY <keyCols>` (`keyedSelectSql`), bound with the locked
+ * rows' key values row by row. The lock read is below the runtime's seam: neither counted nor tallied.
+ * `lockSql` is `''` for every other recovery.
  */
 export interface OpRecovery {
   readonly writeSql: string;
   readonly selectSql: string;
   readonly binds: readonly ReselectBind[];
+  readonly lockSql: string;
+  readonly lockBinds: readonly ReselectBind[];
+  readonly keyCols: readonly string[];
 }
 
 /**
@@ -69,7 +79,7 @@ const SUPPORTED_BINDS: ReadonlySet<ReselectBind['kind']> = new Set(['param', 'la
 function recoveryFor(sql: string): OpRecovery | null {
   const r = buildMysqlReselect(sql);
   if (r === null) return null;
-  for (const b of r.binds) {
+  for (const b of [...r.binds, ...r.lockBinds]) {
     if (!SUPPORTED_BINDS.has(b.kind)) {
       throw new Error(
         `derive-ops: the recovery for '${sql.slice(0, 70)}…' binds '${b.kind}', which no bench cell implements.\n` +
@@ -85,14 +95,6 @@ function recoveryFor(sql: string): OpRecovery | null {
         `  silently recover nothing. Teach the cells the pre-image order before declaring it.`,
     );
   }
-  if (r.lockSql !== '') {
-    throw new Error(
-      `derive-ops: the recovery for '${sql.slice(0, 70)}…' must lock and key its rows BEFORE its write (an\n` +
-        `  UPDATE's WHERE can stop matching the rows it wrote once it has run — #361). Every cell issues the\n` +
-        `  recovery AFTER the write and binds no locked keys, so this statement would recover the wrong rows.\n` +
-        `  Teach the cells the lock-and-key order (lockSql → write → keyedSelectSql) before declaring it.`,
-    );
-  }
   if (r.duplicateIsSkip) {
     throw new Error(
       `derive-ops: the recovery for '${sql.slice(0, 70)}…' is an insert-or-ignore: its write runs as the plain\n` +
@@ -100,7 +102,7 @@ function recoveryFor(sql: string): OpRecovery | null {
         `  into an empty result, so a conflict would fail the cell instead. Teach the cells before declaring it.`,
     );
   }
-  return { writeSql: r.writeSql, selectSql: r.selectSql, binds: r.binds };
+  return { writeSql: r.writeSql, selectSql: r.selectSql, binds: r.binds, lockSql: r.lockSql, lockBinds: r.lockBinds, keyCols: r.keyCols };
 }
 
 /**

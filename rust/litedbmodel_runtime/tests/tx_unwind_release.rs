@@ -13,9 +13,7 @@
 //!   PG     `SELECT count(*) FROM pg_stat_activity WHERE state='idle in transaction'` == 0
 //!   MySQL  `SELECT COUNT(*) FROM information_schema.innodb_trx` == 0
 //!
-//! RED without the fix (measured, #239): PG recycles the dirty connection ⇒ the count is 1. MySQL is
-//! worse than a leak — dropping a sqlx `PoolConnection` outside the tokio runtime its own `Drop`
-//! requires (`livedb.rs:1630-1635`) panics WHILE unwinding, and the process aborts.
+//! RED without the fix (measured, #239): both pools recycle the dirty connection ⇒ the count is 1.
 //!
 //! Gated behind the `livedb` feature AND `LITEDBMODEL_TX_UNWIND=1` (declared in `livedb-gates.env`) so
 //! the default `cargo test` (no DBs) never runs it. Bring up + run:

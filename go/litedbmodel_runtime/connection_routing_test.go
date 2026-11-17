@@ -273,6 +273,25 @@ func TestDriverConfigsDialWithKeepAlive(t *testing.T) {
 	}
 }
 
+// The pgx config [PgPoolFactory] opens its *sql.DB with ([pgConnConfig]) carries the user, password and
+// database exactly as configured, including the characters a URL gives a meaning to.
+func TestPgConnConfigKeepsConfiguredValues(t *testing.T) {
+	user, password, database := "u@s:e/r", "p/a#s?s%41@:w", "d#b?x"
+	c := ResolveConnectionConfig(ConnectionConfig{Driver: "postgres", Host: "127.0.0.1", Port: 5433,
+		User: user, Password: password, Database: database})
+	connConfig, err := pgConnConfig(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if connConfig.User != user || connConfig.Password != password || connConfig.Database != database {
+		t.Fatalf("user/password/database = %q/%q/%q, want %q/%q/%q",
+			connConfig.User, connConfig.Password, connConfig.Database, user, password, database)
+	}
+	if connConfig.Host != "127.0.0.1" || connConfig.Port != 5433 {
+		t.Fatalf("host:port = %s:%d, want 127.0.0.1:5433", connConfig.Host, connConfig.Port)
+	}
+}
+
 // ── C1: reader/writer split (+ RED: reader→writer) ─────────────────────────────
 
 func routingWithPools(reader, writer Pool, sticky *WriterStickyClock) RoutingConfig {

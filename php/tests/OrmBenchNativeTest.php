@@ -11,14 +11,13 @@ use PHPUnit\Framework\TestCase;
 use function LiteDbModel\Runtime\withTransaction;
 
 /**
- * ORM-bench native (ir-exec) conformance (#141 / epic #123, php leg) — ALL 19 ops.
+ * ORM-bench native conformance (#141 / epic #123, php leg) — ALL 19 ops.
  *
  * Proves the litedbmodel php runtime runs the full covered surface (reads, single writes, batch writes,
- * RETURNING-chained transactions) through the bc-GENERATED ir-exec module
- * (`orm_bench/behaviors_generated.php`, verbatim `bc generate --lang php`) bound to the op-agnostic leaf
- * transport ({@see \LiteDbModel\Runtime\Leaves::makeHandlers}) — the php literal path (ts/go/rust =
- * native de-box; py/php = literal). Pins: every op executes; batched relations are N+1-free; batch
- * writes are ONE statement; the RETURNING-chained transactions run through the runtime tx boundary
+ * RETURNING-chained transactions) through the bc-GENERATED native module
+ * (`orm_bench/behaviors_<dialect>.php`, verbatim `bc generate --lang php-native`) calling the op-agnostic
+ * leaf transport ({@see \LiteDbModel\Runtime\Leaves::withTransport()}). Pins: every op executes; batched
+ * relations are N+1-free; batch writes are ONE statement; the RETURNING-chained transactions run through the runtime tx boundary
  * (BEGIN + 2 body + COMMIT = 4 statements) and are ATOMIC (a mid-tx error commits nothing).
  * Schema/seed/harness/safety-counter are the SAME {@see OrmBench} the CSV cell measures (no duplicated
  * setup). Rows are `\stdClass` (php FETCH_OBJ — the record IS the wire).
@@ -124,10 +123,9 @@ final class OrmBenchNativeTest extends TestCase
         $this->assertSame('Updated 1', $this->nameOfUser(1));
         // upsert: INSERT ... ON CONFLICT DO UPDATE RETURNING id (existing email) → the RETURNING row.
         $returning = $this->op('upsert');
-        // Loose numeric equality (mirror of python's `==`): the literal ir-exec path surfaces the
-        // IR-declared `float` outType for the RETURNING id, so it arrives as float(1) — byte-parity
-        // with python (which also returns 1.0). user1 conflict-updated, RETURNING its id.
-        $this->assertEquals(1, $returning[0]->id);
+        // The generated module de-boxes the RETURNING id to its declared `int` (IdRow.id), so it
+        // arrives as int(1). user1 conflict-updated, RETURNING its id.
+        $this->assertSame(1, $returning[0]->id);
         $this->assertSame('Upserted One', $this->nameOfUser(1));
     }
 

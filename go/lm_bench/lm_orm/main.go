@@ -125,6 +125,17 @@ func (c *cell) stmt(sqlText string) *sql.Stmt {
 // put BEGIN and COMMIT on the wire, so the statement count is unchanged at 4.
 func (c *cell) begin() {
 	c.count++
+	c.beginTx()
+}
+
+func (c *cell) commit() {
+	c.count++
+	c.commitTx()
+}
+
+// beginTx / commitTx are begin / commit without the count: the bracket the runtime puts around a MySQL
+// RETURNING recovery outside a transaction, below its seam ([cell.writeReturningID]).
+func (c *cell) beginTx() {
 	tx, err := c.db.Begin()
 	if err != nil {
 		panic(fmt.Sprintf("begin: %v", err))
@@ -132,8 +143,7 @@ func (c *cell) begin() {
 	c.tx = tx
 }
 
-func (c *cell) commit() {
-	c.count++
+func (c *cell) commitTx() {
 	if err := c.tx.Commit(); err != nil {
 		panic(fmt.Sprintf("commit: %v", err))
 	}
@@ -151,6 +161,14 @@ func (c *cell) query(sqlText string, args ...any) [][]any {
 // recoverRows fetches and tallies rows WITHOUT bumping the statement count. It is the body of `query`,
 // and it is also the MySQL RETURNING recovery, which belongs to the logical statement just issued.
 func (c *cell) recoverRows(sqlText string, args ...any) [][]any {
+	out := c.fetchRows(sqlText, args...)
+	c.rows += int64(len(out))
+	return out
+}
+
+// fetchRows runs a prepared SELECT and scans every column of every row, counting nothing — the body of
+// recoverRows, and on its own the lock read of an UPDATE's MySQL RETURNING recovery (below the seam).
+func (c *cell) fetchRows(sqlText string, args ...any) [][]any {
 	rows, err := c.stmt(sqlText).Query(args...)
 	if err != nil {
 		panic(fmt.Sprintf("query %q: %v", sqlText, err))
@@ -169,7 +187,6 @@ func (c *cell) recoverRows(sqlText string, args ...any) [][]any {
 		}
 		out = append(out, vals)
 	}
-	c.rows += int64(len(out))
 	return out
 }
 
@@ -239,14 +256,55 @@ func bindRecovery(binds []setup.Bind, params []any, wrote writeResult) []any {
 // a hand-copied guess at it. The recovery is part of the SAME logical statement: the runtime's own seam
 // counts a MySQL RETURNING write as ONE (it issues the recovery below the seam) while counting the row
 // it recovers, so this tallies the rows without bumping the statement count a second time.
+//
+// Outside a transaction the runtime runs the recovery's steps in a BEGIN … COMMIT of their own
+// (litedbmodel_runtime livedb.go), below its seam: so does the baseline, uncounted.
 func (c *cell) writeReturningID(sqlText string, rec *setup.Recovery, args ...any) int64 {
 	if rec == nil {
 		rows := c.query(sqlText, args...)
 		return asInt(rows[0][0])
 	}
+	if c.tx == nil {
+		c.beginTx()
+		defer c.commitTx()
+	}
+	if rec.LockSQL != "" {
+		// An UPDATE (#361): lock and key its rows BEFORE the write, then recover the written rows by
+		// those keys. The lock read is below the runtime's seam, so it is neither counted nor tallied.
+		locked := c.fetchRows(rec.LockSQL, bindRecovery(rec.LockBinds, args, writeResult{})...)
+		c.exec(rec.WriteSQL, args...)
+		if len(locked) == 0 {
+			panic(fmt.Sprintf("the UPDATE locked no row, so there is no id to return (%q)", rec.WriteSQL))
+		}
+		keys := make([]any, 0, len(locked)*len(rec.KeyCols))
+		for _, k := range locked {
+			keys = append(keys, k...)
+		}
+		rows := c.recoverRows(keyedSelectSQL(rec, len(locked)), keys...)
+		if len(rows) != len(locked) {
+			panic(fmt.Sprintf("the UPDATE locked %d row(s) but its recovery found %d (%q)", len(locked), len(rows), rec.WriteSQL))
+		}
+		return asInt(rows[0][0])
+	}
 	wrote := c.exec(rec.WriteSQL, args...)
 	rows := c.recoverRows(rec.SelectSQL, bindRecovery(rec.Binds, args, wrote)...)
 	return asInt(rows[0][0])
+}
+
+// keyedSelectSQL is an UPDATE recovery's SelectSQL completed for `rows` locked keys: one `(?, …)` tuple
+// per row in KeyCols order, then ` ORDER BY <KeyCols>` — the keyedSelectSql of
+// src/scp/makesql/mysql-returning.ts. The lock read returns exactly KeyCols, so a locked row binds as is.
+func keyedSelectSQL(rec *setup.Recovery, rows int) string {
+	marks := make([]string, len(rec.KeyCols))
+	for i := range marks {
+		marks[i] = "?"
+	}
+	tuple := "(" + strings.Join(marks, ", ") + ")"
+	tuples := make([]string, rows)
+	for i := range tuples {
+		tuples[i] = tuple
+	}
+	return rec.SelectSQL + "(" + strings.Join(tuples, ", ") + ") ORDER BY " + strings.Join(rec.KeyCols, ", ")
 }
 
 // asInt coerces a scanned cell to int64. Each driver reports integers its own way: sqlite and

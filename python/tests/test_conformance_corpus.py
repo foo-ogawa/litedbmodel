@@ -21,6 +21,7 @@ Two levels, so a plain `pytest` (no docker) still guards everything that does no
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 import os
 from pathlib import Path
@@ -64,12 +65,18 @@ def test_corpus_carries_a_seeded_schema():
 @pytest.mark.parametrize("dialect", LIVE_DIALECTS)
 def test_every_vector_names_an_endpoint_the_generated_module_exposes(dialect):
     """The generated module and the corpus come from ONE declaration, so every vector's `entry` must
-    be a component of the module bc emitted. This catches a stale generated module (or a stale
-    corpus) with no database in the loop."""
-    names = set(_load_runner()._load_generated(dialect).COMPONENT_NAMES)
+    be a component of the module bc emitted, and the runner must resolve it to that component's
+    generated entry function. This catches a stale generated module (or a stale corpus) with no
+    database in the loop."""
+    loaded = _load_runner()
+    module = loaded._load_generated(dialect)
+    names = set(module.COMPONENT_NAMES_NATIVE)
     for v in corpus["vectors"]:
         if v["dialect"] == dialect:
             assert v["entry"] in names, f"{v['name']}: '{v['entry']}' is not in the generated module"
+            assert inspect.isfunction(loaded._entry(module, v["entry"])), (
+                f"{v['name']}: the runner resolves no generated entry function for '{v['entry']}'"
+            )
 
 
 @pytest.mark.skipif(os.environ.get("LITEDBMODEL_LIVEDB") != "1", reason="set LITEDBMODEL_LIVEDB=1 + docker up")

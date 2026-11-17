@@ -1660,6 +1660,43 @@ fn current_search_path(driver: &Arc<dyn Driver + Send + Sync>, setup: &[String])
     sp
 }
 
+/// A user name and password holding the characters a URL gives a meaning to (`/ # ? % @ :`) reach the
+/// MySQL server as configured: the shipped constructor connects, as that user.
+fn c3_connection_values_reach_the_server_unchanged() {
+    let root = MysqlDriver::connect(&common::mysql_probe_url()).expect("mysql root connect");
+    let (user, password) = ("lm/u#s?r", "p/a#s?s%41@:w");
+    root.exec_ddl(&[
+        format!("DROP USER IF EXISTS '{user}'@'%'"),
+        format!("CREATE USER '{user}'@'%' IDENTIFIED BY '{password}'"),
+    ])
+    .expect("create the user");
+    let built = MysqlDriver::connect_with_config(
+        &ConnectionConfig {
+            database: None,
+            user: Some(user.to_string()),
+            password: Some(password.to_string()),
+            ..mysql_config(1)
+        }
+        .resolve(),
+    );
+    let current = built.map(|d| {
+        let rows = d
+            .prepare("SELECT CURRENT_USER() AS u")
+            .all(&[])
+            .expect("current user");
+        str_of(&rows[0], "u").unwrap_or_default()
+    });
+    root.exec_ddl(&[format!("DROP USER IF EXISTS '{user}'@'%'")])
+        .expect("drop the user");
+    assert_eq!(
+        current.expect("connect as a user whose name and password hold / # ? % @ :"),
+        format!("{user}@%")
+    );
+    println!(
+        "C3 a user name and password holding / # ? % @ : reach the server unchanged (MySQL): green"
+    );
+}
+
 // ── The single #[test] entry (serial; each phase prints its own PASS line) ──────
 
 #[test]
@@ -1687,6 +1724,7 @@ fn phase_c_connection_routing_and_config() {
     c3_connect_timeout_bounds_the_wait_for_a_free_connection();
     c3_connect_timeout_zero_waits_without_limit();
     c3_idle_connection_is_closed_on_the_server();
+    c3_connection_values_reach_the_server_unchanged();
 
     println!("PHASE C ROUTING+CONFIG PROOF: all C1/C2/C3 green (reader/writer, sticky, with_writer, \
               multi-DB, tx-pin, query_timeout PG+MySQL, maxPool sole cap, session reset-on-release)");

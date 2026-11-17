@@ -18,8 +18,8 @@ package litedbmodel_runtime
 
 import (
 	"database/sql"
-	"fmt"
 	"net"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -54,9 +54,16 @@ func tcpDialer(c ResolvedConnectionConfig) *net.Dialer {
 }
 
 // pgDSN builds a pgx-stdlib DSN from a resolved config (postgres://user:pass@host:port/db?sslmode=disable).
+// Each value is escaped, so a character a URL gives a meaning to (`/ # ? % @ :`) stays part of it.
 func pgDSN(c ResolvedConnectionConfig) string {
-	sslmode := "disable"
-	return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s", c.User, c.Password, c.Host, c.Port, c.Database, sslmode)
+	u := url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(c.User, c.Password),
+		Host:     net.JoinHostPort(c.Host, strconv.Itoa(c.Port)),
+		Path:     "/" + c.Database,
+		RawQuery: "sslmode=disable",
+	}
+	return u.String()
 }
 
 // pgConnConfig is the pgx config [PgPoolFactory] opens its *sql.DB with: the DSN's connection params,

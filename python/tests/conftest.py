@@ -12,22 +12,18 @@ tests a path production does not take.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 import pytest
 
-CTX = {"nodeId": "n0", "component": "executeSQL"}
-
-
-def _ok(outcome: Mapping[str, Any], what: str) -> Any:
-    """Unwrap a leaf Outcome, surfacing a leaf-reported failure as an exception the test can assert on."""
-    if "ok" not in outcome:
-        raise AssertionError(f"{what} did not return an ok outcome: {outcome!r}")
-    return outcome["ok"]
+from litedbmodel_runtime.driver import Driver
+from litedbmodel_runtime.exec_context import ExecutionContext
+from litedbmodel_runtime.leaves import execute_sql, group_children, pluck_keys, with_leaf_transport
 
 
 def run_relation_through_leaves(
-    handlers: Mapping[str, Any],
+    driver_or_ctx: Union[Driver, ExecutionContext],
+    dialect: str,
     parent_sql: str,
     child_sql: str,
     pk: str,
@@ -37,35 +33,29 @@ def run_relation_through_leaves(
 ) -> List[Dict[str, Any]]:
     """Run one relation through the three leaves, returning the grouped parents.
 
-    ``child_db`` is the child fetch's ``db`` control field — ``None`` is the DEFAULT connection, which is
-    exactly how a same-DB relation is lowered.
+    The three calls run inside ONE :func:`with_leaf_transport` scope over ``driver_or_ctx`` + ``dialect``,
+    exactly as a generated module's entry runs inside the scope its caller opens. ``child_db`` is the child
+    fetch's ``db`` control field — ``None`` is the DEFAULT connection, which is exactly how a same-DB
+    relation is lowered.
     """
-    parents = _ok(
-        handlers["executeSQL"]({"sql": parent_sql, "params": []}, CTX), "parent read"
-    )
-    keys: Sequence[Any] = _ok(
-        handlers["pluck"]({"rows": parents, "col": [pk]}, CTX), "pluck"
-    )
-    # ONE param: the deduped key set. The leaf owns its dialect encoding (JSON array on sqlite/MySQL,
-    # native array on PG) — the shaping the batched child SELECT is compiled against.
-    children = _ok(
-        handlers["executeSQL"](
+
+    def relation() -> List[Dict[str, Any]]:
+        parents = execute_sql({"sql": parent_sql, "params": []})
+        keys: Sequence[Any] = pluck_keys({"rows": parents, "col": [pk]})
+        # ONE param: the deduped key set. The leaf owns its dialect encoding (JSON array on sqlite/MySQL,
+        # native array on PG) — the shaping the batched child SELECT is compiled against.
+        children = execute_sql(
             {
                 "sql": child_sql,
                 "params": [list(keys)],
                 "opts": {"db": child_db, "write": None, "whereDynamic": None, "guard": None},
-            },
-            CTX,
-        ),
-        "child fetch",
-    )
-    return _ok(
-        handlers["group"](
-            {"parents": parents, "children": children, "pk": [pk], "fk": [fk], "into": into, "single": False},
-            CTX,
-        ),
-        "group",
-    )
+            }
+        )
+        return group_children(
+            {"parents": parents, "children": children, "pk": [pk], "fk": [fk], "into": into, "single": False}
+        )
+
+    return with_leaf_transport(driver_or_ctx, dialect, relation)
 
 
 @pytest.fixture()

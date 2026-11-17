@@ -6,16 +6,15 @@ declare(strict_types=1);
  * litedbmodel SCP LIVE-DB conformance — the PHP leg (#36 WS7g; leaf/emitter cutover #144).
  *
  * What runs here is the module bc GENERATED for this language from the SAME declaration the TS leg
- * runs (`conformance/harness.ts` → `emitBehaviorModule` → `bc generate --lang php`, one module per
- * live dialect, written by `conformance/gen-livedb.ts`). Nothing is replayed from a serialized
- * bundle: a leaf-executed module needs a LIVE in-process handle, which is exactly why the
- * recorder-era bundle-replay model is gone.
+ * runs (`conformance/harness.ts` → `emitBehaviorModule` → `bc generate --lang php-native`, one module
+ * per live dialect, written by `conformance/gen-livedb.ts`). The module is native: it calls the runtime's
+ * op-agnostic leaf transports ({@see Leaves}) directly. Nothing is replayed from a serialized bundle.
  *
- * The only hand-wiring is the two lines that make the generated module callable — bind the
- * op-agnostic leaf transport to a live PDO and call the endpoint by name:
+ * The only hand-wiring is what makes the generated entry callable — bind the leaf transport to a live PDO
+ * around the call, and call the entry (a static method of the anonymous class `require` returns) with the
+ * vector's input bound to its parameters by name ({@see callEntry()}):
  *
- *     $ops = ($mod->bind)(Leaves::makeHandlers($pdo, $dialect));
- *     $ops[$vector['entry']]((array) $vector['input']);
+ *     Leaves::withTransport($pdo, $dialect, fn () => callEntry($mod, $vector['entry'], (array) $vector['input']));
  *
  * Every vector is compared against what the TS leg observed on the SAME server for the SAME dialect
  * (`conformance/vectors-livedb/livedb.json`): the ORDERED statements the leaf handed the driver, the
@@ -143,7 +142,7 @@ function expectedStatementsFor(string $dialect, array $statements): array
 
 // ── the generated modules ─────────────────────────────────────────────────────
 
-/** Load `php/conformance/behaviors_<dialect>.php` — `bc generate --lang php` for this dialect. */
+/** Load `php/conformance/behaviors_<dialect>.php` — `bc generate --lang php-native` for this dialect. */
 function loadGenerated(string $root, string $dialect): object
 {
     $path = $root . "/php/conformance/behaviors_{$dialect}.php";
@@ -157,14 +156,36 @@ function loadGenerated(string $root, string $dialect): object
 // ── one leg ───────────────────────────────────────────────────────────────────
 
 /**
- * @param array<string, callable> $ops
+ * The entry `$name` of `$mod` called with the vector's input bound to its parameters by name. The corpus
+ * writes no value for a null argument, so a parameter the input leaves out is passed as null — as the go
+ * runner reads it (`optI64` / `optStr`). Input the entry does not declare is an error.
+ *
+ * @param array<string, mixed> $input
+ */
+function callEntry(object $mod, string $name, array $input): mixed
+{
+    $params = array_map(static fn (\ReflectionParameter $p): string => $p->getName(), (new \ReflectionMethod($mod, $name))->getParameters());
+    $extra = array_values(array_diff(array_keys($input), $params));
+    if ($extra !== []) {
+        throw new \TypeError("{$name}() does not declare the input " . json_encode($extra));
+    }
+    $args = [];
+    foreach ($params as $param) {
+        $args[$param] = $input[$param] ?? null;
+    }
+    return [$mod, $name](...$args);
+}
+
+/**
  * @param array<string, mixed> $vector
  * @return array{0: bool, 1: string}
  */
-function runVector(array $ops, \PDO $pdo, array $vector): array
+function runVector(object $mod, string $dialect, \PDO $pdo, array $vector): array
 {
     $GLOBALS['STATEMENT_LOG'] = [];
-    $result = $ops[$vector['entry']]((array) $vector['input']);
+    $name = (string) $vector['entry'];
+    $input = (array) $vector['input'];
+    $result = Leaves::withTransport($pdo, $dialect, static fn (): mixed => callEntry($mod, $name, $input));
     $problems = [];
     $expectedStatements = expectedStatementsFor((string) $vector['dialect'], $vector['expectedStatements']);
     if (!valuesEqual($GLOBALS['STATEMENT_LOG'], $expectedStatements)) {
@@ -193,14 +214,13 @@ function runLeg(string $root, string $dialect, \PDO $pdo, array $vectors, array 
     $tally = ['pass' => 0, 'fail' => 0];
     fwrite(STDERR, "\nlivedb-{$dialect} — " . count($vectors) . " vectors (real {$dialect})\n");
     $mod = loadGenerated($root, $dialect);
-    $ops = ($mod->bind)(Leaves::makeHandlers($pdo, $dialect));
     foreach ($vectors as $v) {
         try {
             // Every vector starts from the SAME seeded state the TS leg captured from.
             foreach ($schema as $stmt) {
                 $pdo->exec($stmt);
             }
-            [$ok, $detail] = runVector($ops, $pdo, (array) $v);
+            [$ok, $detail] = runVector($mod, $dialect, $pdo, (array) $v);
         } catch (\Throwable $e) { // a live-DB failure is a vector FAILURE, never a fake pass
             $ok = false;
             $detail = 'threw: ' . $e->getMessage();

@@ -108,14 +108,18 @@ pub fn first_i64(rows: &[WireValue]) -> i64 {
 /// it answers the COMMIT/ROLLBACK), not for the runtime: a connection handed back to the pool with a
 /// transaction still open holds it for as long as it sits there, so no amount of waiting turns that
 /// red green.
+///
+/// Each reading is taken 150ms after the previous one. MySQL's `information_schema.innodb_trx` is a
+/// snapshot the server refreshes only when it is read more than 100ms after its last refresh, so a
+/// reading taken sooner can predate the transaction it is asked about and report 0.
 pub fn open_tx_count(probe: &ExecutionContext, sql: &str) -> i64 {
     let mut last = -1;
-    for _ in 0..100 {
+    for _ in 0..34 {
+        std::thread::sleep(std::time::Duration::from_millis(150));
         last = first_i64(&seam_execute(probe, sql, &[], &StatementIntent::read()).expect("probe"));
         if last == 0 {
             return 0;
         }
-        std::thread::sleep(std::time::Duration::from_millis(50));
     }
     last
 }

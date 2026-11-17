@@ -1,6 +1,6 @@
 {
     "name": "litedbmodel/runtime",
-    "description": "litedbmodel v2 SCP PHP runtime — interprets the language-neutral §8 published bundle (SqlBundle: sql + fragment tree + Expression-IR param slots + transaction plan, dialect-tagged) and executes it against a PDO SQL driver. Semantics-identical to the TS reference. The behavior-contracts Expression-IR evaluator is VENDORED (see README) since the bc PHP port is not published.",
+    "description": "litedbmodel v2 SCP PHP runtime — the leaf transport (executeSQL / pluckKeys / groupChildren), execution context, transactions and connection routing that a behavior-contracts php-native generated module calls. Semantics-identical to the TS reference.",
     "type": "library",
     "license": "MIT",
     "require": {
@@ -17,7 +17,6 @@
             "LiteDbModel\\Runtime\\": "src/"
         },
         "files": [
-            "src/BehaviorContracts/Constants.php",
             "src/TxOptions.php",
             "src/ExecutionContext.php",
             "src/ConnectionRouting.php",

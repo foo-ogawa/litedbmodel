@@ -36,7 +36,7 @@ from litedbmodel_runtime import (
     transaction,
 )
 from litedbmodel_runtime.driver import SqliteDriver, _SqliteTxConnection
-from litedbmodel_runtime.leaves import make_handlers
+from litedbmodel_runtime.leaves import execute_sql, with_leaf_transport
 
 
 ISO_TBL = "scp_tx_boundary_py"
@@ -250,30 +250,36 @@ def _owner_rows(driver):
 def test_a_leaf_bound_to_another_context_reads_its_own_database_inside_a_transaction():
     drv_a, drv_b = _owner_driver("A"), _owner_driver("B")
     ctx_a, ctx_b = context_for_driver(drv_a), context_for_driver(drv_b)
-    exec_b = make_handlers(ctx_b, "sqlite")["executeSQL"]
     # Another ctx over A's driver has A's owner: it joins A's transaction and sees its uncommitted row.
-    exec_a = make_handlers(context_for_driver(drv_a), "sqlite")["executeSQL"]
+    other_a = context_for_driver(drv_a)
 
     def body():
-        exec_a(_owner_write(2, "A-uncommitted"), {})
-        return exec_b(_OWNER_READ, {}), exec_a(_OWNER_READ, {})
+        with_leaf_transport(other_a, "sqlite", lambda: execute_sql(_owner_write(2, "A-uncommitted")))
+        return (
+            with_leaf_transport(ctx_b, "sqlite", lambda: execute_sql(_OWNER_READ)),
+            with_leaf_transport(other_a, "sqlite", lambda: execute_sql(_OWNER_READ)),
+        )
 
     seen_b, seen_a = transaction(ctx_a, body, TransactionOptions(), "sqlite")
 
-    assert seen_b == {"ok": [{"id": 1, "owner": "B"}]}, "a B-bound leaf inside A's transaction must read B"
-    assert seen_a == {"ok": [{"id": 1, "owner": "A"}, {"id": 2, "owner": "A-uncommitted"}]}
+    assert seen_b == [{"id": 1, "owner": "B"}], "a B-bound leaf inside A's transaction must read B"
+    assert seen_a == [{"id": 1, "owner": "A"}, {"id": 2, "owner": "A-uncommitted"}]
 
 
 def test_a_nested_transaction_on_another_context_writes_and_commits_on_its_own_database():
     drv_a, drv_b = _owner_driver("A"), _owner_driver("B")
     ctx_a, ctx_b = context_for_driver(drv_a), context_for_driver(drv_b)
-    exec_b = make_handlers(ctx_b, "sqlite")["executeSQL"]
 
     class _OuterFails(Exception):
         pass
 
     def body():
-        transaction(ctx_b, lambda: exec_b(_owner_write(2, "via-B"), {}), TransactionOptions(), "sqlite")
+        transaction(
+            ctx_b,
+            lambda: with_leaf_transport(ctx_b, "sqlite", lambda: execute_sql(_owner_write(2, "via-B"))),
+            TransactionOptions(),
+            "sqlite",
+        )
         raise _OuterFails()
 
     with pytest.raises(_OuterFails):

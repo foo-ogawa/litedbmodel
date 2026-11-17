@@ -121,12 +121,10 @@ jobs:
       - name: Warm private go module graph (retry transient auth)
         uses: ./.github/actions/warm-go-module
       - run: npm ci --ignore-scripts
-      # The python vectors runner + the codegen py-exec leg import litedbmodel_runtime, which
-      # consumes the shared behavior-contracts core — install both the local runtime package and
-      # the published bc core so `python3` legs run instead of exiting 1 with an ImportError.
-      - name: Install the Python runtime + behavior-contracts core (for the py legs)
-        # `./python`'s pyproject pins `behavior-contracts==0.8.0` as a hard dep, so this pulls the
-        # bc core too. Without it the py vectors runner + codegen py-exec exit 1 on ImportError.
+      # The python legs import litedbmodel_runtime (the leaf transport the generated
+      # `python-native` modules call) — install the local runtime package so they run instead of
+      # exiting 1 with an ImportError.
+      - name: Install the Python runtime (for the py legs)
         run: python3 -m pip install ./python
       # The repo `.npmrc` sets `ignore-scripts=true`, so `npm ci` skips
       # better-sqlite3's native `install` script and its `better_sqlite3.node`
@@ -374,9 +372,7 @@ jobs:
           # building the addon (see conformance-ts). Force the install script to
           # run so `better_sqlite3.node` is actually produced.
           npm_config_ignore_scripts=false npm rebuild better-sqlite3 --build-from-source=false || (cd node_modules/better-sqlite3 && npx node-gyp rebuild --release)
-          # The behavior-contracts version is pinned by python/pyproject.toml (and package.json for
-          # npm) — installing the package here rather than naming a version keeps the pin in ONE
-          # place. `[livedb]` adds the psycopg/PyMySQL drivers the live legs need.
+          # `[livedb]` adds the psycopg/PyMySQL drivers the live legs need.
           python3 -m pip install './python[livedb,test]'
           composer -d php install
       # Open every live-DB test gate from the ONE declaration (#168). Without this the per-language

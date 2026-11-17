@@ -68,13 +68,21 @@ ORMユーザ  : ライブラリのデコレータでモデル＋宣言エンド�
 transport / wire の配線は `--leaf-transport-import` / `--shared-types-import` で generate 時に焼き込まれ、
 呼び出し側にランタイム注入は無い。ハーネスは「シグネチャで直呼びするだけ」。** go だけは先頭に呼び出し側の
 `context.Context` を取る（ゴルーチンローカルが無いので、要求ごとの ExecutionContext は
-`litedbmodel_runtime.BindLeafTransport` が返す context に乗って届く）。
+`litedbmodel_runtime.BindLeafTransport` が返す context に乗って届く）。python / php（`python-native` /
+`php-native`）は、呼び出しを `with_leaf_transport` / `Leaves::withTransport` で囲んで ExecutionContext を
+束縛する（rust の `with_ambient_context` と同じ形）。
 
 ```go
 rows, err := userrepo.FindByEmail(ctx, "a@b.c")   // go — ctx = BindLeafTransport(execCtx, dialect)
 ```
 ```rust
 let rows = findByEmail("a@b.c".to_string())?; // rust
+```
+```python
+rows = with_leaf_transport(exec_ctx, dialect, lambda: userrepo.find_by_email(email="a@b.c"))  # python
+```
+```php
+$rows = Leaves::withTransport($execCtx, $dialect, static fn () => $userrepo::findByEmail('a@b.c')); // php
 ```
 
 一次ソース: `behavior-contracts/README.md` §「3. Call the generated entry point」。
@@ -84,7 +92,8 @@ let rows = findByEmail("a@b.c".to_string())?; // rust
 - **typed-native に「名前引きエントリ（`bind` 相当）」を要求するな。** ランタイム辞書 lookup を生成物に
   持ち込むことになり、「codegen 出力は静的に端まで追える直呼びのみ」に反する。`bind(handlers)` を出すのは
   literal エミッタ（`typescript` / `python` / `php`）だけで、それは interpreter レグの実行モデルだから。
-  go / rust に literal エミッタは無い（登録エミッタ7種）。
+  go / rust に literal エミッタは無い（登録エミッタ9種）。litedbmodel の python / php は native エミッタ
+  （`python-native` / `php-native`）の生成物を使い、literal エミッタは使わない。
 - **conformance / bench の runner は「ハーネス」。生成メソッドをシグネチャ直呼びする `switch` は §3 が
   認めている形**（`go/lm_bench/lm_orm_native/main.go` の `op()` が既にその形）。
   これを「per-endpoint の手書き＝不正コード」と誤判定して bc に機能要求を投げた事故がある

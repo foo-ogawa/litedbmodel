@@ -10,7 +10,7 @@
  * conformance/harness.ts fixtures  →  emitSpecFor(dialect)      the ONE declaration (no SQL)
  *   → emitBehaviorModule                                        the library's lowering
  *   → tsc --strict                                              bc's authoring requirement
- *   → bc generate --lang python | php | go-typed-native         the real CLI, per live dialect
+ *   → bc generate --lang python-native | php-native | go-typed-native | rust-typed-native   the real CLI, per live dialect
  *   → <lang> runtime binds the leaf transport to a LIVE pg / mysql connection
  * ```
  *
@@ -64,7 +64,7 @@ const BEHAVIOR = 'Conformance';
 // ══════════════════════════════════════════════════════════════════════════════
 
 /**
- * FOUR language legs — python, php, go, rust. The go / rust TYPED-NATIVE emitters cover the SKIP
+ * FOUR language legs — python, php, go, rust, all native. The native emitters cover the SKIP
  * endpoint's `whereDynamic` port now (the dynamic-WHERE fragment list the leaf assembles at execution
  * time, CLAUDE.md §2): the emitter lowers the optional predicates to a `{frags}` plan the leaf
  * transport assembles, so all four modules generate from the SAME declaration. The go / rust flag
@@ -110,16 +110,22 @@ const GO_RT = `${GO_MODULE}/litedbmodel_runtime`;
 
 const LANG_TARGETS: readonly LangTarget[] = [
   {
-    lang: 'python',
+    // python-native — the transports are the module functions of the python runtime's leaf transport.
+    lang: 'python-native',
     out: (d) => join(ROOT, 'python', 'conformance', `behaviors_${d}.py`),
-    flags: [],
+    flags: [
+      '--leaf-transport', 'executeSQL=execute_sql', 'pluck=pluck_keys', 'group=group_children',
+      '--leaf-transport-import', 'litedbmodel_runtime.leaves',
+    ],
   },
   {
-    lang: 'php',
+    // php-native — the transports are the static methods of the php runtime's Leaves class.
+    lang: 'php-native',
     out: (d) => join(ROOT, 'php', 'conformance', `behaviors_${d}.php`),
-    // The php bc runtime-core is VENDORED (bc php is unpublished — `npm run vendor:bc-php`), so the
-    // generated module's require-time gates + `runBehavior` call resolve to that namespace.
-    flags: ['--runtime-import', 'LiteDbModel\\Runtime\\BehaviorContracts'],
+    flags: [
+      '--leaf-transport', 'executeSQL=executeSQL', 'pluck=pluckKeys', 'group=groupChildren',
+      '--leaf-transport-import', 'LiteDbModel\\Runtime\\Leaves',
+    ],
   },
   {
     // go-typed-native — one covered module per dialect, each its OWN package directory (bc names the

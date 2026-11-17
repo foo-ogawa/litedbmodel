@@ -23,16 +23,21 @@ OUT="$HERE/results"
 [ "$SCALE" != "1" ] && OUT="$OUT/scale-$SCALE"
 mkdir -p "$OUT"
 
-# ── arm64 TOOLCHAIN, PINNED AND GUARDED. This is an Apple-Silicon host, but the default PATH points at
-# the x86 Homebrew (/usr/local) — so `node`, `go`, `php`, `cargo` all resolve to x86_64 binaries that run
-# under Rosetta, and one language (python, a universal binary) runs arm64. That mixes architectures AND
-# measures emulation, not the machine. Every number this harness prints must be arm64-native, so the
-# toolchain is resolved to arm64 here and a mismatch is a HARD failure, never a silent Rosetta run.
+# ── arm64 TOOLCHAIN, PINNED AND GUARDED. On an Apple-Silicon host the default PATH can point at an x86
+# Homebrew (/usr/local) — so `node`, `go`, `php`, `cargo` resolve to x86_64 binaries that run under
+# Rosetta, while python (a universal binary) runs arm64. That mixes architectures AND measures emulation,
+# not the machine. Every number this harness prints must be arm64-native, so the toolchain is resolved to
+# arm64 here and a mismatch is a HARD failure, never a silent Rosetta run. On an arm64 linux host (the
+# Docker Sandboxes VM) every tool is already native arm64.
 #
 # Override any entry with BENCH_NODE / BENCH_GO / BENCH_PHP / BENCH_PYTHON; otherwise: node from the
-# newest arm64 nvm install, go/php from /opt/homebrew (arm64 Homebrew), python3 from PATH (Xcode's is a
-# universal binary that already runs arm64). Rust builds with --target aarch64-apple-darwin below.
-RUST_TARGET="aarch64-apple-darwin"
+# newest arm64 nvm install, go/php from /opt/homebrew (arm64 Homebrew) when present, python3 from PATH.
+# Rust builds with --target set to the arm64 triple of this OS.
+case "$(uname -s)" in
+  Darwin) RUST_TARGET="aarch64-apple-darwin" ;;
+  Linux) RUST_TARGET="aarch64-unknown-linux-gnu" ;;
+  *) echo "✗ unsupported OS '$(uname -s)' — no arm64 rust target for it."; exit 1 ;;
+esac
 pick_arm64_node() {
   [ -n "${BENCH_NODE:-}" ] && { echo "$BENCH_NODE"; return; }
   local n
