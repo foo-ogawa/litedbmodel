@@ -24,11 +24,17 @@ behavior-contracts に依存しない。behavior-contracts を 0.12.0 に更新�
   `BehaviorError` に包む（元の例外を cause / previous に保持する）。
 - python のエントリは snake_case の関数名になった（引数は authored の名前のまま）。php のエントリは生成ファイルの
   `require` が返すオブジェクトの static メソッドになった。
+- rust の MySQL の接続プールは、I/O エラーが起きた接続を、次に取り出すときに閉じる。
+- rust の MySQL の `min_pool` は、作成時に開く接続の数と、使われていない接続を閉じるときの下限である。
+  接続が切れて下限を下回ったときは、補充しない。
+- rust の MySQL の接続プールは、sqlx の既定の `max_lifetime`（30分を超えた接続の入れ替え）を行わない。
+  PostgreSQL の接続プールと同じである。
 
 ### Fixed
 
-- rust の MySQL の接続プールが、接続を取り出すたびに ping を送っていた。文ごとに往復が1回増え、1文の操作が
-  約2倍の時間になっていた。接続を取り出すときは、PostgreSQL の接続プールと同じく、何も送らない（#389）。
+- rust の MySQL の接続プール（sqlx の `MySqlPool`）が、接続を取り出すとき・返すときに ping を送っていた。
+  1文の操作が、同じ文を実行する SDK の約2倍の時間になっていた。接続プールを PostgreSQL と同じ `deadpool` に
+  替え、接続を取り出すとき・返すときは何も送らない（#389）。
 - 言語間ベンチの SDK のセルが、MySQL の `UPDATE … RETURNING` の lock-and-key に追随しておらず、
   `derive-ops` で停止していた（#388）。
 - rust の MySQL で、トランザクションの途中で接続が切れたときに、再試行せずにエラーを返していた。sqlx の I/O

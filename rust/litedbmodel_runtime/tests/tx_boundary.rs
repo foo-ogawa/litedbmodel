@@ -8,19 +8,17 @@
 //! one — and that second connection is not in the transaction, so the uncommitted rows are invisible
 //! to it. Then the SERVER is asked whether anything is still holding a transaction open.
 //!
-//! RED (measured, negative control): replacing the `acquire_tx()` of
-//! `with_transaction_decided_isolated` (`src/exec_context.rs`) with a per-statement FORWARDING handle
-//! — the #238 shape, a single-connection tx handle laid over a POOLED driver — checks the connection
-//! back into the pool between statements. The two assertions catch that from opposite ends, and the
-//! two pools trip DIFFERENT ones, so neither covers for the other:
+//! RED (measured, negative control): replacing the `acquire_tx()` of `acquire_tx_connection`
+//! (`src/exec_context.rs`) with a per-statement FORWARDING handle — the #238 shape, a
+//! single-connection tx handle laid over a POOLED driver — checks the connection back into the pool
+//! between statements. The two assertions catch that from opposite ends: a pool that hands the
+//! boundary's connection straight back to the outside read trips the first, and one that opens a
+//! second connection while the boundary's statements scatter across the pool trips the second (an
+//! INSERT autocommits on a connection that is not in the transaction, and the outside read sees it).
+//! Both pools here are `deadpool` pools and trip the first:
 //!
-//!   PG     left: 1  right: 2  "the boundary still OWNS its connection, so the outside statement
-//!                             needed a second" — deadpool handed the boundary's own connection
-//!                             straight back to the outside read, so a second was never opened.
-//!   MySQL  left: 1  right: 0  "a statement OUTSIDE the boundary must not see its uncommitted rows"
-//!                             — sqlx did open a second connection, but the boundary's statements
-//!                             had scattered across the pool, so one INSERT AUTOCOMMITTED on a
-//!                             connection that was not in the transaction and the outside read saw it.
+//!   PG, MySQL  left: 1  right: 2  "the boundary still OWNS its connection, so the outside statement
+//!                                 needed a second"
 //!
 //! One claim each, so no claim is asserted twice:
 //!

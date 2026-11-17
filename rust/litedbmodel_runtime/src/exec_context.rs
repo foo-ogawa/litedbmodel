@@ -950,8 +950,7 @@ fn rollback_or_poison(tx_ctx: &ExecutionContext, guard: &TxGuard<'_>) {
 /// handle is released exactly once, when this guard drops: on the success path, on every `Err` path,
 /// AND when `body` PANICS and the stack unwinds past it (#239 — an unwinding body used to drop a bare
 /// [`TxSlot`], which runs no ROLLBACK, no `release`, and hands a pooled connection back to the pool
-/// still INSIDE an open transaction; a sqlx `PoolConnection` dropped that way also panics for want of
-/// the tokio context its own `Drop` requires).
+/// still INSIDE an open transaction).
 ///
 /// `poison` starts TRUE (python's `destroy = True`): the connection is only PROVEN clean once a
 /// COMMIT/ROLLBACK has completed without failing, which is what [`TxGuard::keep`] records. So an
@@ -982,8 +981,7 @@ impl Drop for TxGuard<'_> {
     fn drop(&mut self) {
         if let Some(tx) = self.slot.get_mut().take() {
             // `release` runs no SQL — the COMMIT/ROLLBACK was already seam-issued. It drops the owned
-            // connection (back to the pool, or destroyed when poisoned) INSIDE the driver's runtime,
-            // which is the context a sqlx `PoolConnection`'s own `Drop` requires
+            // connection (back to the pool, or destroyed when poisoned) inside the driver's runtime
             // ([`crate::livedb`] `MyTx::release`).
             let _ = tx.release(self.poison.get());
         }

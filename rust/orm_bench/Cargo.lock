@@ -899,6 +899,7 @@ version = "2.2.15"
 dependencies = [
  "behavior-contracts",
  "chrono",
+ "deadpool",
  "deadpool-postgres",
  "futures-util",
  "rusqlite",

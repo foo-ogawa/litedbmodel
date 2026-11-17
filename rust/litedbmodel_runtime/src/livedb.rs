@@ -6,10 +6,10 @@
 //!
 //!   - Postgres: `tokio-postgres` + `deadpool-postgres` (`Pool::Postgres(deadpool_postgres::Pool)`
 //!     in the old `.rs`). `$N` is the native placeholder and RETURNING is native — nothing to adapt.
-//!   - MySQL / SQLite: `sqlx` on the tokio runtime (`Pool::Mysql(MySqlPool)` /
-//!     `Pool::Sqlite(SqlitePool)` in the old `.rs`). MySQL uses `?` natively; MySQL 8.0 has NO
-//!     `RETURNING`, so an `INSERT … RETURNING` is emulated at this seam (strip → INSERT → re-select
-//!     the AUTO_INCREMENT PK) — the dialect-behavior-by-convention the WS6 TS ScpDialect uses.
+//!   - MySQL: `sqlx` connections in a `deadpool` pool, on the tokio runtime. MySQL uses `?` natively;
+//!     MySQL 8.0 has NO `RETURNING`, so an `INSERT … RETURNING` is emulated at this seam (strip →
+//!     INSERT → re-select the AUTO_INCREMENT PK) — the dialect-behavior-by-convention the WS6 TS
+//!     ScpDialect uses.
 //!
 //! ## Why the sync [`Driver`] facade over an async pool
 //!
@@ -37,8 +37,8 @@
 
 use behavior_contracts::Value;
 use deadpool_postgres::{Config as PgConfig, Pool as PgPool, Runtime as PgRuntime};
-use sqlx::mysql::{MySqlPoolOptions, MySqlRow};
-use sqlx::{Column, MySqlPool, Row, TypeInfo, ValueRef as SqlxValueRef};
+use sqlx::mysql::{MySqlConnectOptions, MySqlRow};
+use sqlx::{Column, Connection as _, MySqlConnection, Row, TypeInfo, ValueRef as SqlxValueRef};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Runtime;
@@ -93,9 +93,9 @@ pub const ACQUIRE_TIMEOUT_ENV: &str = "LITEDBMODEL_ACQUIRE_TIMEOUT_SECS";
 
 /// How long an acquire of the conn-string / URL constructors may take before it fails.
 ///
-/// Production keeps the full 30s budget: `sqlx`'s `connect()` RETRIES a connection error until this
-/// expires, which is what absorbs a database restart, so shortening it in production would trade that
-/// away.
+/// Production keeps the full 30s budget: the MySQL pool RETRIES a refused connection until this
+/// expires ([`MyManager`]), which is what absorbs a database restart, so shortening it in production
+/// would trade that away.
 ///
 /// The run gate's phase 2 is the one caller that wants it short. It points every leg at a port that
 /// REFUSES every connection (`127.0.0.1:1`) to prove a test really dials a server — and against a hard
@@ -118,22 +118,17 @@ fn connect_bound(millis: u64) -> Option<Duration> {
     (millis > 0).then(|| Duration::from_millis(millis))
 }
 
-/// What "no limit" is passed to `sqlx` as. Its acquire has no unbounded form — it adds the timeout to
-/// `Instant::now()` (`sqlx-core` `pool/inner.rs`, `pool/options.rs`), so `Duration::MAX` would overflow —
-/// and a hundred years is the stand-in.
-const SQLX_NO_LIMIT: Duration = Duration::from_secs(100 * 365 * 24 * 60 * 60);
-
-/// How long a sweep of the [`IdleReaper`] runs the driver's runtime.
+/// How long a sweep of the Postgres pool's [`IdleReaper`] runs the driver's runtime.
 const REAPER_SLICE: Duration = Duration::from_millis(10);
 
 /// Closes a pool's connections once they have gone unused for `idle`, on a thread of its own.
 ///
 /// The drivers' runtime is current-thread: it only runs while some caller is inside `block_on`. In a
-/// quiet application nothing drives it, so neither a pool's maintenance nor a connection's task would
-/// run and an idle connection would stay open on the server until the next query. This thread wakes
-/// every `idle` and runs `sweep`, which closes what has been idle for `idle` and drives the runtime for
-/// [`REAPER_SLICE`] so the closes complete — an idle connection is closed between `idle` and `2 × idle`
-/// after its last use. The thread stops when the reaper (the driver that owns it) is dropped.
+/// quiet application nothing drives it, so no connection's task would run and an idle connection
+/// would stay open on the server until the next query. This thread wakes every `idle` and runs
+/// `sweep`, which closes, inside the runtime, what has been idle for `idle` — an idle connection is
+/// closed between `idle` and `2 × idle` after its last use. The thread stops when the reaper (the
+/// driver that owns it) is dropped.
 struct IdleReaper {
     _stop: std::sync::mpsc::Sender<()>,
 }
@@ -939,33 +934,102 @@ impl PreparedStatement for PgPrepared<'_> {
     }
 }
 
-// ── MySQL (sqlx MySqlPool) ─────────────────────────────────────────────────────
+// ── MySQL (sqlx connections in a deadpool pool) ────────────────────────────────
 //
 // Prepared-statement caching (the perf fix the Go leg needed) is ALREADY built into this path: sqlx
 // prepares each unique SQL ONCE per connection and reuses the handle. `sqlx::query(sql)` defaults to
 // `persistent = true`, and `MySqlConnectOptions::statement_cache_capacity` defaults to 100 (cache ON),
 // so sqlx's MySQL executor takes the `get_or_prepare_statement` branch — it sends only a
 // `StatementExecute` for a repeat, NOT `Parse`+`Execute`+`StmtClose` (the un-cached branch). The cache
-// lives on the pooled `MySqlConnection` and SURVIVES `pool.acquire()`/release (sqlx does not clear it
-// on return-to-pool), so both the per-call-acquired read/write path and the tx-owned connection reuse
-// prepared statements automatically. This was CONFIRMED by measurement: applying the Postgres
-// prepared-statement fix (`prepare_cached`, ~2.1× on pg writes+reads) left the MySQL p50 UNCHANGED
-// (create 1.184 → 1.202ms, median-of-medians 1.268 → 1.258ms), i.e. MySQL was never paying a redundant
-// per-call Parse. So NO hand-rolled statement cache is added here — it would be redundant with sqlx's
-// and, worse, a naïve one would collide with the RETURNING emulation below (a prepared statement path
-// bypasses the conn-level RETURNING interception — the same carve-out the Go fix documented). A pooled
-// statement acquires its connection without a round trip (see `MysqlDriver::assemble`); a RETURNING
-// write costs the extra round trips of its strip→INSERT→re-select emulation.
+// lives on the pooled `MySqlConnection` and SURVIVES checkout and return, so both the per-call
+// checked-out read/write path and the tx-owned connection reuse prepared statements automatically.
+// This was CONFIRMED by measurement: applying the Postgres prepared-statement fix (`prepare_cached`,
+// ~2.1× on pg writes+reads) left the MySQL p50 UNCHANGED (create 1.184 → 1.202ms, median-of-medians
+// 1.268 → 1.258ms), i.e. MySQL was never paying a redundant per-call Parse. So NO hand-rolled
+// statement cache is added here — it would be redundant with sqlx's and, worse, a naïve one would
+// collide with the RETURNING emulation below (a prepared statement path bypasses the conn-level
+// RETURNING interception — the same carve-out the Go fix documented). Checking a connection out and
+// returning it send nothing to the server (see [`MyManager`]); a RETURNING write costs the extra round
+// trips of its strip→INSERT→re-select emulation.
 
-/// A live MySQL driver: a `sqlx` `MySqlPool` on a shared tokio runtime (the old `.rs`
-/// `Pool::Mysql(MySqlPool)`). `?` is native; emulates the missing `INSERT … RETURNING`. A write-tx
-/// OWNS one pooled connection via [`Driver::begin_tx`] (§3 — no driver-global writer slot).
+/// One pooled MySQL connection, and whether a call on it failed in a way that leaves it unusable —
+/// [`MyConn::fail`] decides that, for every call. [`MyManager::recycle`] closes a broken connection
+/// instead of handing it out again.
+struct MyConn {
+    raw: MySqlConnection,
+    broken: bool,
+}
+
+impl MyConn {
+    /// The failure of the sqlx call `what` on this connection. Any error but one the server reported
+    /// for the statement (`sqlx::Error::Database`) — an I/O or protocol error — leaves the connection
+    /// in an unknown state, so it is marked broken.
+    fn fail(&mut self, what: &str, e: sqlx::Error) -> SqlFailure {
+        if !matches!(e, sqlx::Error::Database(_)) {
+            self.broken = true;
+        }
+        driver_failure(format!("{what}: {e}"))
+    }
+}
+
+/// Opens and recycles the MySQL pool's connections.
+///
+/// Opening RETRIES a refused connection — waiting 10ms, doubling, up to a fifth of `connect_timeout` —
+/// until the pool's create timeout (`connect_timeout`) expires: a restarting database refuses
+/// connections, and the retry absorbs the restart. Any other error ends the attempt.
+///
+/// Recycling, at checkout, sends nothing to the server — as the Postgres pool's
+/// `RecyclingMethod::Fast` does — and refuses only a connection marked broken, which the pool then
+/// closes.
+struct MyManager {
+    options: MySqlConnectOptions,
+    connect_timeout: Option<Duration>,
+}
+
+impl deadpool::managed::Manager for MyManager {
+    type Type = MyConn;
+    type Error = sqlx::Error;
+
+    async fn create(&self) -> Result<MyConn, sqlx::Error> {
+        let max_backoff = self.connect_timeout.map_or(Duration::MAX, |t| t / 5);
+        let mut backoff = Duration::from_millis(10);
+        loop {
+            match MySqlConnection::connect_with(&self.options).await {
+                Ok(raw) => return Ok(MyConn { raw, broken: false }),
+                Err(sqlx::Error::Io(e)) if e.kind() == std::io::ErrorKind::ConnectionRefused => {}
+                Err(e) => return Err(e),
+            }
+            tokio::time::sleep(backoff).await;
+            backoff = backoff.saturating_mul(2).min(max_backoff);
+        }
+    }
+
+    async fn recycle(
+        &self,
+        conn: &mut MyConn,
+        _: &deadpool::managed::Metrics,
+    ) -> deadpool::managed::RecycleResult<sqlx::Error> {
+        if conn.broken {
+            return Err(deadpool::managed::RecycleError::message(
+                "a call on this connection failed",
+            ));
+        }
+        Ok(())
+    }
+}
+
+type MyPool = deadpool::managed::Pool<MyManager>;
+type MyObject = deadpool::managed::Object<MyManager>;
+
+/// A live MySQL driver: a `deadpool` pool of `sqlx` connections ([`MyManager`]) on a shared tokio
+/// runtime. `?` is native; emulates the missing `INSERT … RETURNING`. A write-tx OWNS one pooled
+/// connection via [`Driver::begin_tx`] (§3 — no driver-global writer slot).
 ///
 /// sqlx already caches prepared statements per connection (see the module note above) — no additional
 /// statement cache is layered here.
 pub struct MysqlDriver {
     rt: Arc<Runtime>,
-    pool: MySqlPool,
+    pool: MyPool,
     _idle_reaper: IdleReaper,
 }
 
@@ -978,47 +1042,68 @@ impl MysqlDriver {
             .enable_all()
             .build()
             .map_err(|e| driver_failure(format!("mysql runtime: {e}")))?;
+        let options = url
+            .parse::<MySqlConnectOptions>()
+            .map_err(|e| driver_failure(format!("mysql connect: {e}")))?;
         Self::assemble(
             rt,
-            MySqlPoolOptions::new().max_connections(DEFAULT_POOL_SIZE as u32),
-            url,
+            options,
+            DEFAULT_POOL_SIZE,
+            0,
             Some(acquire_timeout()),
             Duration::from_millis(DEFAULT_IDLE_TIMEOUT_MILLIS),
         )
     }
 
-    /// Build the pool both constructors share: getting a connection — waiting for a free one, and
-    /// opening a new one — bounded by `connect_timeout` (`sqlx`'s `acquire_timeout` covers both;
-    /// `None` ⇒ [`SQLX_NO_LIMIT`]), and
-    /// connections unused for `idle` closed by `sqlx`'s own `idle_timeout` reaper task, which the
-    /// [`IdleReaper`] gives the runtime to run on.
+    /// Build the pool both constructors share: `max` connections; getting one — waiting for a free
+    /// slot, and opening a new connection — bounded by `connect_timeout` each (`None` ⇒ no limit); and
+    /// an [`IdleReaper`] closing connections unused for `idle` while more than `min` are open. As in the
+    /// Postgres pool, the sweep goes by deadpool's `last_used` (the time since the connection was last
+    /// CHECKED OUT), so a connection held longer than `idle` is closed at the first sweep after it is
+    /// returned.
     ///
-    /// Taking a connection out of the pool sends nothing to the server (`test_before_acquire(false)`;
-    /// sqlx's default pings on every acquire, and every pooled statement acquires). The Postgres pool
-    /// takes connections the same way (deadpool's `RecyclingMethod::Fast`). sqlx still pings each
-    /// connection as it returns to the pool and drops one that fails, and the `idle` reaper closes
-    /// connections left unused.
+    /// `min` connections, and at least one, are opened before this returns, so a constructor that
+    /// returns has reached the server.
     fn assemble(
         rt: Runtime,
-        options: MySqlPoolOptions,
-        url: &str,
+        options: MySqlConnectOptions,
+        max: usize,
+        min: usize,
         connect_timeout: Option<Duration>,
         idle: Duration,
     ) -> Result<Self, SqlFailure> {
-        let pool = rt.block_on(async {
-            options
-                .acquire_timeout(connect_timeout.unwrap_or(SQLX_NO_LIMIT))
-                .idle_timeout(Some(idle))
-                .test_before_acquire(false)
-                .connect(url)
-                .await
-                .map_err(|e| driver_failure(format!("mysql connect: {e}")))
-        })?;
+        let pool = MyPool::builder(MyManager {
+            options,
+            connect_timeout,
+        })
+        .max_size(max)
+        .wait_timeout(connect_timeout)
+        .create_timeout(connect_timeout)
+        .runtime(deadpool::Runtime::Tokio1)
+        .build()
+        .map_err(|e| driver_failure(format!("mysql pool: {e}")))?;
+        let opened = min.clamp(1, max);
+        rt.block_on(futures_util::future::try_join_all(
+            (0..opened).map(|_| pool.get()),
+        ))
+        .map_err(|e| driver_failure(format!("mysql connect: {e}")))?;
         let rt = Arc::new(rt);
         let idle_reaper = {
-            let rt = rt.clone();
+            let (rt, pool) = (rt.clone(), pool.clone());
             IdleReaper::spawn(idle, move || {
-                rt.block_on(async { tokio::time::sleep(REAPER_SLICE).await })
+                rt.block_on(async {
+                    let mut open = pool.status().size;
+                    let unused = pool.retain(|_, metrics| {
+                        if metrics.last_used() < idle || open <= min {
+                            return true;
+                        }
+                        open -= 1;
+                        false
+                    });
+                    for conn in unused.removed {
+                        let _ = conn.raw.close().await;
+                    }
+                })
             })?
         };
         Ok(MysqlDriver {
@@ -1029,19 +1114,18 @@ impl MysqlDriver {
     }
 
     /// Connect from a resolved Phase C [`ResolvedConnectionConfig`] — the [`PoolFactory`] path (#88):
-    /// the pool SIZING (`max_pool` → `sqlx` `max_connections`) is applied AT CONSTRUCTION so the config
-    /// is the SOLE source of the pool cap. Connection params flow from the config (assembled into the
+    /// the pool SIZING (`max_pool` → `deadpool` pool size) is applied AT CONSTRUCTION so the config is
+    /// the SOLE source of the pool cap. Connection params flow from the config (assembled into the
     /// `mysql://` URL).
     ///
     /// ## Honest per-driver deviations (documented, not silently dropped)
-    ///   - **`min_pool`**: `sqlx` HAS `min_connections` (an idle floor), so — unlike the TS mysql2
-    ///     factory, which has none — `min_pool` IS applied here (`min_connections(min_pool)`). Noted
-    ///     because the parity target (the TS reference) documents mysql2's lack; the rust `sqlx` pool
-    ///     honors it.
-    ///   - **`keep_alive` / `keep_alive_initial_delay_millis`**: `sqlx`'s `MySqlPoolOptions` has no TCP
-    ///     keepalive-probe knob (it manages idle connections via `idle_timeout` / `max_lifetime`, not a
-    ///     socket keepalive). `keep_alive` is therefore a NO-OP for the MySQL factory (documented; not
-    ///     leaked as a bogus option). The SIZING CAP that matters (`max_pool`) is honored.
+    ///   - **`min_pool`**: applied — unlike the TS mysql2 factory, which has none: `min_pool`
+    ///     connections are opened at construction and the idle sweep keeps that many open. Noted because
+    ///     the parity target (the TS reference) documents mysql2's lack.
+    ///   - **`keep_alive` / `keep_alive_initial_delay_millis`**: `sqlx`'s `MySqlConnectOptions` has no
+    ///     TCP keepalive-probe knob. `keep_alive` is therefore a NO-OP for the MySQL factory
+    ///     (documented; not leaked as a bogus option). The SIZING CAP that matters (`max_pool`) is
+    ///     honored.
     pub fn connect_with_config(config: &ResolvedConnectionConfig) -> Result<Self, SqlFailure> {
         if config.driver != ConfigDialect::Mysql {
             return Err(driver_failure(format!(
@@ -1062,14 +1146,14 @@ impl MysqlDriver {
         let password = config.password.clone().unwrap_or_default();
         let database = config.database.clone().unwrap_or_default();
         let url = format!("mysql://{user}:{password}@{host}:{port}/{database}");
-        let min = config.min_pool;
-        let max = config.max_pool.max(1); // sqlx requires max >= 1
+        let options = url
+            .parse::<MySqlConnectOptions>()
+            .map_err(|e| driver_failure(format!("mysql connect: {e}")))?;
         Self::assemble(
             rt,
-            MySqlPoolOptions::new()
-                .min_connections(min)
-                .max_connections(max),
-            &url,
+            options,
+            config.max_pool.max(1) as usize, // a pool needs at least one connection
+            config.min_pool as usize,
             connect_bound(config.connect_timeout_millis),
             Duration::from_millis(config.idle_timeout_millis),
         )
@@ -1077,20 +1161,25 @@ impl MysqlDriver {
 
     pub fn exec_ddl(&self, statements: &[String]) -> Result<(), SqlFailure> {
         self.rt.block_on(async {
+            let mut conn = self
+                .pool
+                .get()
+                .await
+                .map_err(|e| driver_failure(format!("mysql acquire: {e}")))?;
             for stmt in statements {
                 sqlx::query(stmt)
-                    .execute(&self.pool)
+                    .execute(&mut conn.raw)
                     .await
-                    .map_err(|e| driver_failure(format!("mysql ddl {stmt:?}: {e}")))?;
+                    .map_err(|e| conn.fail(&format!("mysql ddl {stmt:?}"), e))?;
             }
             Ok(())
         })
     }
 
-    /// The live pool's current total connection count (`sqlx` `size`) — for the maxPool sole-cap live
-    /// proof.
+    /// The live pool's current total connection count (deadpool `status().size`) — for the maxPool
+    /// sole-cap live proof.
     pub fn total_connections(&self) -> usize {
-        self.pool.size() as usize
+        self.pool.status().size
     }
 }
 
@@ -1864,7 +1953,7 @@ fn parse_insert_cols(insert: &str) -> Vec<String> {
 /// server's `SERVER_STATUS_IN_TRANS` flag crate-private, and the runtime issues BEGIN as raw SQL, so the
 /// connection's OWNER is what knows.)
 async fn my_all_on_conn(
-    conn: &mut sqlx::MySqlConnection,
+    conn: &mut MyConn,
     sql: &str,
     params: &[Value],
     in_tx: bool,
@@ -1893,15 +1982,15 @@ async fn my_all_on_conn(
 
     let q = bind_my(sqlx::query(sql), params)?;
     let rows = q
-        .fetch_all(&mut *conn)
+        .fetch_all(&mut conn.raw)
         .await
-        .map_err(|e| driver_failure(format!("mysql query [{sql}]: {e}")))?;
+        .map_err(|e| conn.fail(&format!("mysql query [{sql}]"), e))?;
     my_rows_to_wire(&rows)
 }
 
 /// One RETURNING emulation's steps on `conn` (the caller makes them atomic).
 async fn my_returning_on_conn(
-    conn: &mut sqlx::MySqlConnection,
+    conn: &mut MyConn,
     rs: &MysqlReselect,
     params: &[Value],
 ) -> Result<Vec<WireValue>, SqlFailure> {
@@ -1919,14 +2008,14 @@ async fn my_returning_on_conn(
             });
         }
         let rows = bind_my(sqlx::query(&rs.select_sql), &sel_params)?
-            .fetch_all(&mut *conn)
+            .fetch_all(&mut conn.raw)
             .await
-            .map_err(|e| driver_failure(format!("mysql pre-select [{}]: {e}", rs.select_sql)))?;
+            .map_err(|e| conn.fail(&format!("mysql pre-select [{}]", rs.select_sql), e))?;
         let out = my_rows_to_wire(&rows)?;
         let deleted = bind_my(sqlx::query(&rs.write_sql), params)?
-            .execute(&mut *conn)
+            .execute(&mut conn.raw)
             .await
-            .map_err(|e| driver_failure(format!("mysql write [{}]: {e}", rs.write_sql)))?;
+            .map_err(|e| conn.fail(&format!("mysql write [{}]", rs.write_sql), e))?;
         // The DELETE must have removed exactly the locked pre-image.
         let written = written_row_count(rs.written, deleted.rows_affected() as i64);
         check_recovered(out.len(), written, &rs.write_sql)?;
@@ -1945,13 +2034,13 @@ async fn my_returning_on_conn(
             })
             .collect();
         let keys = bind_my(sqlx::query(&rs.lock_sql), &lock_params)?
-            .fetch_all(&mut *conn)
+            .fetch_all(&mut conn.raw)
             .await
-            .map_err(|e| driver_failure(format!("mysql lock [{}]: {e}", rs.lock_sql)))?;
+            .map_err(|e| conn.fail(&format!("mysql lock [{}]", rs.lock_sql), e))?;
         bind_my(sqlx::query(&rs.write_sql), params)?
-            .execute(&mut *conn)
+            .execute(&mut conn.raw)
             .await
-            .map_err(|e| driver_failure(format!("mysql write [{}]: {e}", rs.write_sql)))?;
+            .map_err(|e| conn.fail(&format!("mysql write [{}]", rs.write_sql), e))?;
         if keys.is_empty() {
             return Ok(Vec::new());
         }
@@ -1971,20 +2060,20 @@ async fn my_returning_on_conn(
         }
         let select_sql = keyed_select_sql(rs, keys.len());
         let rows = bind_my(sqlx::query(&select_sql), &key_values)?
-            .fetch_all(&mut *conn)
+            .fetch_all(&mut conn.raw)
             .await
-            .map_err(|e| driver_failure(format!("mysql re-select [{select_sql}]: {e}")))?;
+            .map_err(|e| conn.fail(&format!("mysql re-select [{select_sql}]"), e))?;
         check_recovered(rows.len(), Some(keys.len() as i64), &rs.write_sql)?;
         return my_rows_to_wire(&rows);
     }
     if !rs.anchor_sql.is_empty() {
         sqlx::query(&rs.anchor_sql)
-            .fetch_all(&mut *conn)
+            .fetch_all(&mut conn.raw)
             .await
-            .map_err(|e| driver_failure(format!("mysql anchor [{}]: {e}", rs.anchor_sql)))?;
+            .map_err(|e| conn.fail(&format!("mysql anchor [{}]", rs.anchor_sql), e))?;
     }
     let exec_res = match bind_my(sqlx::query(&rs.write_sql), params)?
-        .execute(&mut *conn)
+        .execute(&mut conn.raw)
         .await
     {
         Ok(r) => r,
@@ -1998,12 +2087,7 @@ async fn my_returning_on_conn(
         {
             return Ok(Vec::new());
         }
-        Err(e) => {
-            return Err(driver_failure(format!(
-                "mysql write [{}]: {e}",
-                rs.write_sql
-            )))
-        }
+        Err(e) => return Err(conn.fail(&format!("mysql write [{}]", rs.write_sql), e)),
     };
     let last_id = exec_res.last_insert_id() as i64;
     let affected = exec_res.rows_affected() as i64;
@@ -2031,20 +2115,20 @@ async fn my_returning_on_conn(
         });
     }
     let rows = bind_my(sqlx::query(&rs.select_sql), &sel_params)?
-        .fetch_all(&mut *conn)
+        .fetch_all(&mut conn.raw)
         .await
-        .map_err(|e| driver_failure(format!("mysql re-select [{}]: {e}", rs.select_sql)))?;
+        .map_err(|e| conn.fail(&format!("mysql re-select [{}]", rs.select_sql), e))?;
     check_recovered(rows.len(), written, &rs.write_sql)?;
     my_rows_to_wire(&rows)
 }
 
 /// Run a tx-control literal on `conn` (raw_sql: MySQL rejects it in the prepared protocol, error 1295).
-async fn my_tx_control(conn: &mut sqlx::MySqlConnection, sql: &str) -> Result<(), SqlFailure> {
+async fn my_tx_control(conn: &mut MyConn, sql: &str) -> Result<(), SqlFailure> {
     sqlx::raw_sql(sql)
-        .execute(&mut *conn)
+        .execute(&mut conn.raw)
         .await
         .map(|_| ())
-        .map_err(|e| driver_failure(format!("mysql tx-control [{sql}]: {e}")))
+        .map_err(|e| conn.fail(&format!("mysql tx-control [{sql}]"), e))
 }
 
 /// Is `sql` a tx-control / SET statement MySQL rejects in the prepared-statement protocol (error
@@ -2066,7 +2150,7 @@ fn my_is_raw_sql_stmt(sql: &str) -> bool {
 /// on the tx-owned connection, #93) takes the `raw_sql` path — MySQL rejects those in the
 /// prepared-statement protocol (error 1295).
 async fn my_run_on_conn(
-    conn: &mut sqlx::MySqlConnection,
+    conn: &mut MyConn,
     sql: &str,
     params: &[Value],
 ) -> Result<RunInfo, SqlFailure> {
@@ -2075,9 +2159,9 @@ async fn my_run_on_conn(
         // affected-row summary is irrelevant for tx-control (the tx runtime ignores it).
         debug_assert!(params.is_empty(), "tx-control statement carries no params");
         sqlx::raw_sql(sql)
-            .execute(&mut *conn)
+            .execute(&mut conn.raw)
             .await
-            .map_err(|e| driver_failure(format!("mysql tx-control [{sql}]: {e}")))?;
+            .map_err(|e| conn.fail(&format!("mysql tx-control [{sql}]"), e))?;
         return Ok(RunInfo {
             changes: 0,
             last_insert_rowid: 0,
@@ -2085,9 +2169,9 @@ async fn my_run_on_conn(
     }
     let q = bind_my(sqlx::query(sql), params)?;
     let res = q
-        .execute(&mut *conn)
+        .execute(&mut conn.raw)
         .await
-        .map_err(|e| driver_failure(format!("mysql exec [{sql}]: {e}")))?;
+        .map_err(|e| conn.fail(&format!("mysql exec [{sql}]"), e))?;
     Ok(RunInfo {
         changes: res.rows_affected() as i64,
         last_insert_rowid: res.last_insert_id() as i64,
@@ -2096,7 +2180,7 @@ async fn my_run_on_conn(
 
 impl PreparedStatement for MyPrepared<'_> {
     fn all(&mut self, params: &[Value]) -> Result<Vec<WireValue>, SqlFailure> {
-        // Pooled read: acquire a connection per call (parallel-safe). In-tx statements never reach
+        // Pooled read: check out a connection per call (parallel-safe). In-tx statements never reach
         // here — the seam resolves the tx-owned `MyTx` connection for those.
         let sql = self.sql.clone();
         let driver = self.driver;
@@ -2104,7 +2188,7 @@ impl PreparedStatement for MyPrepared<'_> {
         driver.rt.block_on(async move {
             let mut conn = driver
                 .pool
-                .acquire()
+                .get()
                 .await
                 .map_err(|e| driver_failure(format!("mysql acquire: {e}")))?;
             my_all_on_conn(&mut conn, &sql, &params, false).await
@@ -2120,7 +2204,7 @@ impl PreparedStatement for MyPrepared<'_> {
         driver.rt.block_on(async move {
             let mut conn = driver
                 .pool
-                .acquire()
+                .get()
                 .await
                 .map_err(|e| driver_failure(format!("mysql acquire: {e}")))?;
             my_run_on_conn(&mut conn, &sql, &params).await
@@ -2140,7 +2224,7 @@ impl Driver for MysqlDriver {
         })
     }
 
-    /// Begin a transaction OWNING one pooled connection (§3): acquire a `sqlx` connection, `BEGIN` on
+    /// Begin a transaction OWNING one pooled connection (§3): check out a connection, `BEGIN` on
     /// it (via `raw_sql` — MySQL rejects BEGIN/COMMIT/ROLLBACK in the prepared-statement protocol,
     /// error 1295), and hand back a [`MyTx`] that runs every tx statement + COMMIT/ROLLBACK on THAT
     /// owned connection. Concurrent `begin_tx` calls get DISTINCT connections ⇒ isolated.
@@ -2161,27 +2245,27 @@ impl Driver for MysqlDriver {
         let conn = self.rt.block_on(async {
             let mut conn = self
                 .pool
-                .acquire()
+                .get()
                 .await
                 .map_err(|e| driver_failure(format!("mysql acquire (tx): {e}")))?;
             // Isolation SET (if any) BEFORE BEGIN — it scopes the immediately-following transaction.
             for sql in before_begin {
                 sqlx::raw_sql(sql)
-                    .execute(&mut *conn)
+                    .execute(&mut conn.raw)
                     .await
-                    .map_err(|e| driver_failure(format!("mysql tx prelude [{sql}]: {e}")))?;
+                    .map_err(|e| conn.fail(&format!("mysql tx prelude [{sql}]"), e))?;
             }
             // BEGIN via raw_sql (MySQL rejects BEGIN/COMMIT/ROLLBACK in the prepared-statement
             // protocol, error 1295).
             sqlx::raw_sql("BEGIN")
-                .execute(&mut *conn)
+                .execute(&mut conn.raw)
                 .await
-                .map_err(|e| driver_failure(format!("mysql BEGIN: {e}")))?;
+                .map_err(|e| conn.fail("mysql BEGIN", e))?;
             for sql in after_begin {
                 sqlx::raw_sql(sql)
-                    .execute(&mut *conn)
+                    .execute(&mut conn.raw)
                     .await
-                    .map_err(|e| driver_failure(format!("mysql tx post-begin [{sql}]: {e}")))?;
+                    .map_err(|e| conn.fail(&format!("mysql tx post-begin [{sql}]"), e))?;
             }
             Ok::<_, SqlFailure>(conn)
         })?;
@@ -2197,7 +2281,7 @@ impl Driver for MysqlDriver {
     fn acquire_tx(&self) -> Result<Box<dyn TxConnection + '_>, SqlFailure> {
         let conn = self.rt.block_on(async {
             self.pool
-                .acquire()
+                .get()
                 .await
                 .map_err(|e| driver_failure(format!("mysql acquire (tx): {e}")))
         })?;
@@ -2215,14 +2299,14 @@ impl Driver for MysqlDriver {
         let conn = self.rt.block_on(async {
             let mut conn = self
                 .pool
-                .acquire()
+                .get()
                 .await
                 .map_err(|e| driver_failure(format!("mysql acquire (session): {e}")))?;
             for sql in setup {
                 sqlx::raw_sql(sql)
-                    .execute(&mut *conn)
+                    .execute(&mut conn.raw)
                     .await
-                    .map_err(|e| driver_failure(format!("mysql session setup [{sql}]: {e}")))?;
+                    .map_err(|e| conn.fail(&format!("mysql session setup [{sql}]"), e))?;
             }
             Ok::<_, SqlFailure>(conn)
         })?;
@@ -2238,7 +2322,7 @@ impl Driver for MysqlDriver {
 /// runs RESET (clean) or drops (poison). Reuses [`my_all_on_conn`] / [`my_run_on_conn`] for statements.
 struct MySession<'a> {
     rt: &'a Runtime,
-    conn: Option<sqlx::pool::PoolConnection<sqlx::MySql>>,
+    conn: Option<MyObject>,
     reset: Vec<String>,
 }
 
@@ -2260,26 +2344,24 @@ impl SessionConnection for MySession<'_> {
             let mut result = Ok(());
             if !poison {
                 for sql in &reset {
-                    if let Err(e) = sqlx::raw_sql(sql).execute(&mut *conn).await {
-                        result = Err(driver_failure(format!("mysql session reset [{sql}]: {e}")));
+                    if let Err(e) = sqlx::raw_sql(sql).execute(&mut conn.raw).await {
+                        result = Err(conn.fail(&format!("mysql session reset [{sql}]"), e));
                         break;
                     }
                 }
             }
-            // Drop the PoolConnection INSIDE the runtime context (sqlx requires a Tokio context on drop;
-            // dropping it outside block_on panics under a current-thread runtime).
-            drop(conn);
+            drop(conn); // returned to the pool; one a failed call marked broken is closed at checkout.
             result
         })
     }
 }
 
 /// An OWNED MySQL transaction connection (§3 per-execution ownership — the rust analogue of v1
-/// `PoolTransaction::Mysql`). Holds ONE `sqlx` pooled connection for the tx's whole span; every
+/// `PoolTransaction::Mysql`). Holds ONE `deadpool` connection for the tx's whole span; every
 /// statement + the final COMMIT/ROLLBACK run on it. Dropping the connection returns it to the pool.
 struct MyTx<'a> {
     rt: &'a Runtime,
-    conn: sqlx::pool::PoolConnection<sqlx::MySql>,
+    conn: MyObject,
 }
 
 impl TxConnection for MyTx<'_> {
@@ -2296,36 +2378,30 @@ impl TxConnection for MyTx<'_> {
     }
 
     fn release(self: Box<Self>, poison: bool) -> Result<(), SqlFailure> {
-        // The COMMIT/ROLLBACK was already seam-issued on this connection. Release = drop the
-        // PoolConnection INSIDE the runtime context (sqlx `PoolConnection` Drop requires a Tokio
-        // context; dropping it outside `block_on` panics under a current-thread runtime). `poison` ⇒
-        // DETACH it from the pool first so its Drop CLOSES the connection instead of recycling a
-        // possibly-broken one (`PoolConnection::detach` yields a plain `MySqlConnection` that is closed
-        // on drop).
+        // The COMMIT/ROLLBACK was already seam-issued on this connection. Release = drop the pooled
+        // Object (deadpool returns it to the pool). `poison` ⇒ DESTROY it (do not return a
+        // possibly-broken connection): deadpool's `Object::take` detaches it so its Drop closes the
+        // connection instead of recycling. Dropped inside the runtime, as the Postgres `PgTx` does.
         let MyTx { rt, conn } = *self;
         rt.block_on(async move {
             if poison {
-                let detached = conn.detach();
-                drop(detached); // closed, never recycled.
+                drop(MyObject::take(conn)); // detached from the pool ⇒ closed, never recycled.
             } else {
-                drop(conn); // returned to the pool clean, inside the runtime.
+                drop(conn); // returned to the pool clean.
             }
         });
         Ok(())
     }
 
     fn commit(self: Box<Self>) -> Result<(), SqlFailure> {
-        // Move the owned connection INTO the async block so it is dropped (returned to the pool)
-        // WITHIN the tokio runtime context — a sqlx `PoolConnection` Drop requires a Tokio context
-        // (dropping it outside `block_on` panics under a current-thread runtime).
         let MyTx { rt, mut conn } = *self;
         rt.block_on(async move {
             let r = sqlx::raw_sql("COMMIT")
-                .execute(&mut *conn)
+                .execute(&mut conn.raw)
                 .await
-                .map_err(|e| driver_failure(format!("mysql COMMIT: {e}")))
+                .map_err(|e| conn.fail("mysql COMMIT", e))
                 .map(|_| ());
-            drop(conn); // return to pool inside the runtime
+            drop(conn); // returned to the pool
             r
         })
     }
@@ -2334,11 +2410,11 @@ impl TxConnection for MyTx<'_> {
         let MyTx { rt, mut conn } = *self;
         rt.block_on(async move {
             let r = sqlx::raw_sql("ROLLBACK")
-                .execute(&mut *conn)
+                .execute(&mut conn.raw)
                 .await
-                .map_err(|e| driver_failure(format!("mysql ROLLBACK: {e}")))
+                .map_err(|e| conn.fail("mysql ROLLBACK", e))
                 .map(|_| ());
-            drop(conn); // return to pool inside the runtime
+            drop(conn); // returned to the pool
             r
         })
     }

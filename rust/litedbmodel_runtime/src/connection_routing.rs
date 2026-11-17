@@ -12,8 +12,9 @@
 //! The TS reference's pool abstraction is `AsyncConnectionPool` (`acquire`/`release`). In the rust
 //! runtime the [`Driver`] trait IS the pool: each live [`Driver`](crate::driver::Driver)
 //! ([`PostgresDriver`](crate::livedb::PostgresDriver) / [`MysqlDriver`](crate::livedb::MysqlDriver))
-//! owns its OWN internal async connection pool (`deadpool-postgres` / `sqlx`), and the synchronous
-//! `prepare(sql).all()/run()` facade checks out one pooled connection per call. So a
+//! owns its OWN internal async connection pool (`deadpool-postgres` / `deadpool` of `sqlx`
+//! connections), and the synchronous `prepare(sql).all()/run()` facade checks out one pooled
+//! connection per call. So a
 //! [`ReaderWriterPools`] here is a pair of `Arc<dyn Driver + Sync>` and a [`ConnectionRegistry`] is a
 //! `name → ReaderWriterPools` map. `Arc` (not a bare `&`) because a registry OWNS its drivers (the
 //! `buildRoutingConfig` factory constructs them) and a single-pool pair shares the SAME `Arc` for
