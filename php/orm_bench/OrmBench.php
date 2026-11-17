@@ -56,7 +56,7 @@ final class OrmBench
     }
 
     /**
-     * All 19 covered ops in generated declaration order (COMPONENT_NAMES).
+     * All 19 covered ops in generated declaration order (COMPONENT_NAMES_NATIVE).
      *
      * @var list<string>
      */

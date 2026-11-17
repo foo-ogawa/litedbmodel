@@ -62,10 +62,10 @@ final class ConformanceCorpusTest extends TestCase
             self::assertFileExists($path, 'run `npm run conformance:gen:livedb`');
             // The generated module and the corpus come from ONE declaration, so every vector's entry
             // must be a component of the module bc emitted — a stale artifact fails here, no DB.
-            $names = require $path;
+            $module = require $path;
             foreach (self::corpus()->vectors as $v) {
                 if ($v->dialect === $dialect) {
-                    self::assertContains($v->entry, $names->COMPONENT_NAMES, $v->name);
+                    self::assertContains($v->entry, $module::COMPONENT_NAMES_NATIVE, $v->name);
                 }
             }
         }

@@ -72,7 +72,7 @@ _SETUP = setup_for("sqlite")
 SCHEMA: List[str] = _SETUP["schema"]  # the sqlite default (in-memory cell); a live target loads its own
 SEED: List[str] = _SETUP["delete"] + _SETUP["insert"]  # empty + the canonical 110-user fixture, per op
 
-# All 19 covered ops in generated declaration order (COMPONENT_NAMES).
+# All 19 covered ops in generated declaration order (COMPONENT_NAMES_NATIVE).
 OPS: List[str] = [
     "findAll", "filterPaginateSort", "findFirst", "findUnique",
     "nestedFindAll", "nestedFindFirst", "nestedFindUnique", "nestedRelations", "compositeRelations",
