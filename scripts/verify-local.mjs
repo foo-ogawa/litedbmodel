@@ -44,11 +44,15 @@ const LIST_ONLY = argv.includes('--list');
  * The plan, in the order a failure is most cheaply found: static gates, then the type/lint layer, then
  * the suites that need a database. `db: true` marks a step that cannot run without the dockerized
  * PG+MySQL (`npm run docker:livedb:up`).
+ * `args` on an npm step are passed to the script after `--`, the way CI invokes it.
  */
 const STEPS = [
   { npm: 'deps:installed', db: false },
   { npm: 'deps:check', db: false },
-  { npm: 'audit:check', db: false },
+  // The same scope as ci.yml and release.yml: the guard covers what a consumer installs; the dev
+  // toolchain is reported by CI, not gated.
+  { npm: 'audit:check', args: ['--omit=dev'], db: false },
+  { npm: 'audit:signatures', db: false },
   { npm: 'sync:versions:check', db: false },
   { npm: 'tracked:check', db: false },
   { npm: 'pkg:check', db: false },
@@ -87,6 +91,9 @@ const STEPS = [
   { npm: 'go:dispatch:check', db: true },
   { npm: 'rust:dispatch:check', db: true },
 ];
+
+/** The `npm run` arguments of an npm step: the script, then its `args` after `--`. */
+const npmRun = (s) => [s.npm, ...(s.args ? ['--', ...s.args] : [])];
 
 // ── the list cannot drift from CI ───────────────────────────────────────────────────────────────
 const WORKFLOWS = join(ROOT, '.github/workflows');
@@ -141,7 +148,7 @@ need(
 );
 
 if (LIST_ONLY) {
-  for (const s of STEPS) console.log(`${s.db ? 'db  ' : '    '}${s.npm ? `npm run ${s.npm}` : s.cmd.join(' ')}`);
+  for (const s of STEPS) console.log(`${s.db ? 'db  ' : '    '}${s.npm ? `npm run ${npmRun(s).join(' ')}` : s.cmd.join(' ')}`);
   process.exit(0);
 }
 
@@ -210,8 +217,8 @@ for (const step of STEPS) {
     results.push({ label: step.npm ?? step.label, state: 'skipped (--no-db)', ms: 0 });
     continue;
   }
-  const label = step.npm ? `npm run ${step.npm}` : step.label;
-  const [cmd, args] = step.npm ? ['npm', ['run', '--silent', step.npm]] : [step.cmd[0], step.cmd.slice(1)];
+  const label = step.npm ? `npm run ${npmRun(step).join(' ')}` : step.label;
+  const [cmd, args] = step.npm ? ['npm', ['run', '--silent', ...npmRun(step)]] : [step.cmd[0], step.cmd.slice(1)];
   process.stderr.write(`── ${label}\n`);
   const started = Date.now();
   const r = spawnSync(cmd, args, { cwd: ROOT, stdio: 'inherit', env: { ...process.env, ...gateEnv } });

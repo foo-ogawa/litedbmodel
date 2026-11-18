@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Guard: `npm audit --audit-level=moderate`, minus the provisional exceptions the owner approved
-// (EXCEPTIONS below; none today).
+// (EXCEPTIONS below; none today). Any arguments are passed to `npm audit` (ci.yml, release.yml and
+// scripts/verify-local.mjs pass `--omit=dev`, so the guard covers what a consumer installs).
 //
 // Why a script and not a bare `npm audit` in ci.yml / release.yml: npm audit has no per-advisory,
 // per-path allowlist, and an exception must hold only for one advisory reached through one set of
@@ -9,10 +10,11 @@
 // passes here does not stop the release after it merges.
 //
 // The rule is not weakened anywhere else: the level stays `moderate` (info and low are the only
-// severities npm audit itself does not gate on), devDependencies are included (no `--omit=dev`), and
-// every finding that is not covered by an EXCEPTIONS entry below fails the run.
+// severities npm audit itself does not gate on), and every finding that is not covered by an
+// EXCEPTIONS entry below fails the run. devDependencies are audited by a separate report-only step
+// in ci.yml and release.yml.
 //
-// Usage: node scripts/check-audit.mjs   (exit 1 on any moderate-or-higher finding not excepted)
+// Usage: node scripts/check-audit.mjs [npm audit args…]   (exit 1 on any moderate-or-higher finding not excepted)
 
 import { spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
@@ -93,7 +95,7 @@ export function evaluateAudit(report, today, exceptions = EXCEPTIONS) {
 function main() {
   const today = new Date().toISOString().slice(0, 10);
   // npm audit exits 1 when it finds anything; the verdict here comes from the JSON, not the exit code.
-  const r = spawnSync('npm', ['audit', '--audit-level=moderate', '--json'], {
+  const r = spawnSync('npm', ['audit', '--audit-level=moderate', '--json', ...process.argv.slice(2)], {
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
   });
