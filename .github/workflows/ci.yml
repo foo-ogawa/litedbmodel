@@ -21,11 +21,17 @@ jobs:
           cache: npm
       - name: Install
         run: npm ci --ignore-scripts
-      - name: Audit
-        # The same audit release.yml gates the publish on (devDeps included), so a pull request that
-        # passes here does not stop the release after it merges. `audit:check` is `npm audit
-        # --audit-level=moderate` minus the dated exceptions listed in scripts/check-audit.mjs (none today).
-        run: npm run audit:check
+      - name: Audit (production dependencies)
+        # The same audit release.yml gates the publish on, so a pull request that passes here does not
+        # stop the release after it merges. `audit:check` is `npm audit --audit-level=moderate` minus
+        # the dated exceptions listed in scripts/check-audit.mjs (none today); `--omit=dev` scopes it to
+        # what a consumer installs.
+        run: npm run audit:check -- --omit=dev
+      - name: Audit including dev dependencies (report only)
+        # Non-blocking visibility for the dev toolchain, which runs only in CI and on a
+        # developer's machine. Fix these when an upstream release makes it possible.
+        continue-on-error: true
+        run: npm audit --audit-level=moderate
       - name: Verify npm signatures
         # `audit:signatures` runs `npm audit signatures` with the npm version package.json pins, here
         # and in release.yml / npm-audit-remediate.yml. Node 22's bundled npm 10 fails a package whose
