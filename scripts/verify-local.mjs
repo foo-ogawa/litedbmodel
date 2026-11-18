@@ -52,6 +52,7 @@ const STEPS = [
   // The same scope as ci.yml and release.yml: the guard covers what a consumer installs; the dev
   // toolchain is reported by CI, not gated.
   { npm: 'audit:check', args: ['--omit=dev'], db: false },
+  { npm: 'audit:signatures', db: false },
   { npm: 'sync:versions:check', db: false },
   { npm: 'tracked:check', db: false },
   { npm: 'pkg:check', db: false },
