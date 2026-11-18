@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Guard: `npm audit --audit-level=moderate`, minus the provisional exceptions the owner approved
-// (EXCEPTIONS below; none today). Any arguments are passed to `npm audit` (ci.yml and release.yml
-// pass `--omit=dev`, so the guard covers what a consumer installs).
+// (EXCEPTIONS below; none today). Any arguments are passed to `npm audit` (ci.yml, release.yml and
+// scripts/verify-local.mjs pass `--omit=dev`, so the guard covers what a consumer installs).
 //
 // Why a script and not a bare `npm audit` in ci.yml / release.yml: npm audit has no per-advisory,
 // per-path allowlist, and an exception must hold only for one advisory reached through one set of
