@@ -68,7 +68,7 @@
 
 import type { PortableType } from 'behavior-contracts/runtime';
 import { DBExists, DBSubquery, DBParentRef, type ColumnRef, type SubqueryCondition } from '../../DBValues';
-import type { ConditionObject, ConditionValue } from '../../DBConditions';
+import { putCondition, withDefaultFilter, type ConditionObject, type ConditionValue } from '../../DBConditions';
 import { compileSelect, type BoundCount, type SelectBundle, type SelectDesc } from '../makesql/compile-select';
 import { compileWhere } from '../makesql/compile';
 import { inListPredicate, tupleInPredicate } from '../makesql/json-array';
@@ -79,6 +79,7 @@ import { compileRelationOp, parentKeyCols, relationGuard, targetKeyCols, type Re
 import { resolveFindHardLimit } from '../limit-config';
 import {
   connectionOf,
+  findFilterOf,
   deriveModelColumns,
   modelColumnResolver,
   relationDeclOf,
@@ -351,7 +352,8 @@ class EmitContext {
       select: projection.join(', '),
       // The BOUNDED predicates — this read's static WHERE, whatever else it declares. (An all-optional
       // read compiles an EMPTY condition set, which is the same no-WHERE statement it always was.)
-      conditions: this.conditions(model, where.filter((p) => !isOptional(p))),
+      // AND the model's default filter (`@model({ filter })`), as every v1 `find` does.
+      conditions: withDefaultFilter(this.conditions(model, where.filter((p) => !isOptional(p))), findFilterOf(model, this.spec.dialect)),
       ...(endpoint.view !== undefined ? { cte: cteOf(endpoint.view) } : {}),
       ...(endpoint.order !== undefined ? { order: endpoint.order } : {}),
       ...(limit !== undefined ? { limit } : {}),
@@ -471,7 +473,7 @@ class EmitContext {
       // `TargetClass.getDriverType()`'s driver, so a relation whose target lives in another database is
       // fetched THERE and not against the parent's (which would read a missing / same-named table).
       lines.push(
-        `const ${childVar}: WireValue[] = Db.executeSQL(${quote(op.sql)}, [${keysVar}]${execOptions({
+        `const ${childVar}: WireValue[] = Db.executeSQL(${quote(op.sql)}, [${[keysVar, ...(op.conditionParams ?? []).map(renderSlot)].join(', ')}]${execOptions({
           ...(op.connection !== undefined ? { db: op.connection } : {}),
           ...(guardExpr !== undefined ? { guard: guardExpr } : {}),
         })});`,
@@ -731,15 +733,9 @@ class EmitContext {
    * produced by `DBConditions` exactly as the imperative path produces it.
    */
   private conditions(model: ModelClassLike, where: readonly Predicate[]): ConditionObject {
-    const out: Record<string, ConditionValue> = {};
-    let n = 0;
-    const put = (key: string, value: ConditionValue): void => {
-      // The condition object is keyed BY THE SQL FRAGMENT, so two identical fragments would collapse
-      // into one. A repeat gets trailing spaces, which `DBConditions` emits verbatim (SQL-insignificant).
-      let k = key;
-      while (k in out) k = `${key}${' '.repeat(++n)}`;
-      out[k] = value;
-    };
+    const out: ConditionObject = {};
+    // The condition object is keyed BY THE SQL FRAGMENT; `putCondition` keeps a repeat as its own AND member.
+    const put = (key: string, value: ConditionValue): void => putCondition(out, key, value);
     for (const p of where) {
       if (p.kind === 'isNull') {
         put(p.column, null);
@@ -783,7 +779,7 @@ class EmitContext {
       if (cmp.op === 'eq') put(cmp.column, ref);
       else put(`${cmp.column} ${SQL_OPS[cmp.op]} ?`, ref);
     }
-    return out as ConditionObject;
+    return out;
   }
 
   /**
@@ -944,6 +940,10 @@ function renderSlot(slot: unknown): string {
   if (slot instanceof ParamRef) return slot.expr;
   const ref = (slot as { __batchArray?: { ref?: unknown } })?.__batchArray?.ref;
   if (ref instanceof ParamRef) return ref.expr;
+  // A CONSTANT bound value (a declared relation `where`, a model's default filter, a view's own params).
+  // bc types a bare numeric literal as a float, so a whole number is spelled an `Int`, as every other
+  // integer the emitter bakes is (`CapGuard.limit`).
+  if (typeof slot === 'bigint' || (typeof slot === 'number' && Number.isInteger(slot))) return `${String(slot)} as Int`;
   return JSON.stringify(slot);
 }
 

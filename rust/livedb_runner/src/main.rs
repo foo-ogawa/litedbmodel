@@ -333,6 +333,82 @@ mod imp {
         name,
         post_count
     });
+    impl_to_compare!(pg::NotesRow {
+        archived,
+        author_id,
+        body,
+        id
+    });
+    impl_to_compare!(pg::NotesByAuthorRow {
+        archived,
+        author_id,
+        body,
+        id
+    });
+    impl_to_compare!(pg::UsersWithFilteredRelationsRow {
+        id,
+        latestNote,
+        livePosts,
+        name,
+        notes
+    });
+    impl_to_compare!(pg::UsersWithFilteredRelationsRow_latestNote {
+        archived,
+        author_id,
+        body,
+        id
+    });
+    impl_to_compare!(pg::UsersWithFilteredRelationsRow_livePosts {
+        author_id,
+        created_at,
+        id,
+        status,
+        title
+    });
+    impl_to_compare!(pg::UsersWithFilteredRelationsRow_notes {
+        archived,
+        author_id,
+        body,
+        id
+    });
+    impl_to_compare!(my::NotesRow {
+        archived,
+        author_id,
+        body,
+        id
+    });
+    impl_to_compare!(my::NotesByAuthorRow {
+        archived,
+        author_id,
+        body,
+        id
+    });
+    impl_to_compare!(my::UsersWithFilteredRelationsRow {
+        id,
+        latestNote,
+        livePosts,
+        name,
+        notes
+    });
+    impl_to_compare!(my::UsersWithFilteredRelationsRow_latestNote {
+        archived,
+        author_id,
+        body,
+        id
+    });
+    impl_to_compare!(my::UsersWithFilteredRelationsRow_livePosts {
+        author_id,
+        created_at,
+        id,
+        status,
+        title
+    });
+    impl_to_compare!(my::UsersWithFilteredRelationsRow_notes {
+        archived,
+        author_id,
+        body,
+        id
+    });
     impl_to_compare!(pg::WriteSummary {
         changes,
         lastInsertRowid
@@ -567,6 +643,28 @@ mod imp {
                 pg::postsWithAuthor().map(|r| r.to_compare())
             } else {
                 my::postsWithAuthor().map(|r| r.to_compare())
+            }
+        }),
+        ("notes", |pg, _input| {
+            if pg {
+                pg::notes().map(|r| r.to_compare())
+            } else {
+                my::notes().map(|r| r.to_compare())
+            }
+        }),
+        ("notesByAuthor", |pg, input| {
+            let a = in_i64(input, "authorId");
+            if pg {
+                pg::notesByAuthor(a).map(|r| r.to_compare())
+            } else {
+                my::notesByAuthor(a).map(|r| r.to_compare())
+            }
+        }),
+        ("usersWithFilteredRelations", |pg, _input| {
+            if pg {
+                pg::usersWithFilteredRelations().map(|r| r.to_compare())
+            } else {
+                my::usersWithFilteredRelations().map(|r| r.to_compare())
             }
         }),
         ("createPost", |pg, input| {

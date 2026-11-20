@@ -33,7 +33,7 @@
  */
 
 import { DBModel } from './DBModel';
-import { type ConditionObject } from './DBConditions';
+import { type ConditionObject, mergeConditions } from './DBConditions';
 import { type Conds, createColumn, orderToString, condsToRecord } from './Column';
 import type { SelectOptions } from './types';
 import { getSqlCastMap } from './decorators';
@@ -336,10 +336,10 @@ export class LazyRelationContext {
     const pgType = inferPgArrayType(values, sqlCast);
     
     // Build conditions
-    const conditions: ConditionObject = {
-      __raw__: [`${tableName}.${targetKey} = ANY(?::${pgType})`, [values]],
-      ...config.conditions,
-    };
+    const conditions: ConditionObject = mergeConditions(
+      { __raw__: [`${tableName}.${targetKey} = ANY(?::${pgType})`, [values]] },
+      config.conditions,
+    );
     
     const options: SelectOptions = {};
     if (config.order) options.order = config.order;
@@ -409,10 +409,8 @@ export class LazyRelationContext {
     values: unknown[],
     config: RelationConfig
   ): Promise<DBModel[]> {
-    const conditions: ConditionObject = {
-      ...config.conditions,
-      [targetKey]: values,
-    };
+    // The key set first, then the relation's conditions — the order the SCP batch binds them in.
+    const conditions: ConditionObject = mergeConditions({ [targetKey]: values }, config.conditions);
 
     const options: SelectOptions = {};
     if (config.order) options.order = config.order;
@@ -488,10 +486,11 @@ export class LazyRelationContext {
     
     // Build LATERAL inner SQL using buildSelectSQL
     const lateralParams: unknown[] = [];
-    const lateralConditions: ConditionObject = {
-      __raw__: `${tableName}.${targetKey} = _keys.key`,
-      ...config.conditions,
-    };
+    // The per-parent window reads the target through buildSelectSQL (no default filter of its own), so the
+    // target model's `@model({ filter })` joins here — as it does for an un`limit`ed relation.
+    const lateralConditions: ConditionObject = TargetClass._scopedConditions(
+      mergeConditions({ __raw__: `${tableName}.${targetKey} = _keys.key` }, config.conditions),
+    );
     const { sql: lateralSql } = TargetClass.buildSelectSQL(
       lateralConditions,
       {
@@ -545,10 +544,7 @@ export class LazyRelationContext {
       .map((key, i) => `${tableName}.${key} = _keys.key${i}`)
       .join(' AND ');
     
-    const lateralConditions: ConditionObject = {
-      __raw__: keyConditions,
-      ...config.conditions,
-    };
+    const lateralConditions: ConditionObject = TargetClass._scopedConditions(mergeConditions({ __raw__: keyConditions }, config.conditions));
     const { sql: lateralSql } = TargetClass.buildSelectSQL(
       lateralConditions,
       {
@@ -595,10 +591,7 @@ export class LazyRelationContext {
     
     // Build CTE SQL using buildSelectSQL for the inner query
     const cteParams: unknown[] = [];
-    const cteConditions: ConditionObject = {
-      [targetKey]: values,
-      ...config.conditions,
-    };
+    const cteConditions: ConditionObject = TargetClass._scopedConditions(mergeConditions({ [targetKey]: values }, config.conditions));
     const { sql: cteSql } = TargetClass.buildSelectSQL(
       cteConditions,
       {
@@ -648,10 +641,7 @@ export class LazyRelationContext {
     
     // Build CTE conditions (composite IN + additional conditions)
     const inClause = `(${targetKeys.join(', ')}) IN (${tuplePlaceholders})`;
-    const cteConditions: ConditionObject = {
-      __raw__: inClause,
-      ...config.conditions,
-    };
+    const cteConditions: ConditionObject = TargetClass._scopedConditions(mergeConditions({ __raw__: inClause }, config.conditions));
     
     // Build inner SQL using buildSelectSQL
     const { sql: cteSql } = TargetClass.buildSelectSQL(

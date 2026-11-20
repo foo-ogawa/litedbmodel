@@ -246,6 +246,50 @@ type PostsWithAuthorRow_author struct {
 	Post_count *int64  // "post_count"
 }
 
+type NotesRow struct {
+	Archived  *int64  // "archived"
+	Author_id *int64  // "author_id"
+	Body      *string // "body"
+	Id        *int64  // "id"
+}
+
+type NotesByAuthorRow struct {
+	Archived  *int64  // "archived"
+	Author_id *int64  // "author_id"
+	Body      *string // "body"
+	Id        *int64  // "id"
+}
+
+type UsersWithFilteredRelationsRow struct {
+	Id         *int64                                     // "id"
+	LatestNote []UsersWithFilteredRelationsRow_latestNote // "latestNote"
+	LivePosts  []UsersWithFilteredRelationsRow_livePosts  // "livePosts"
+	Name       *string                                    // "name"
+	Notes      []UsersWithFilteredRelationsRow_notes      // "notes"
+}
+
+type UsersWithFilteredRelationsRow_latestNote struct {
+	Archived  *int64  // "archived"
+	Author_id *int64  // "author_id"
+	Body      *string // "body"
+	Id        *int64  // "id"
+}
+
+type UsersWithFilteredRelationsRow_livePosts struct {
+	Author_id  *int64  // "author_id"
+	Created_at *string // "created_at"
+	Id         *int64  // "id"
+	Status     *string // "status"
+	Title      *string // "title"
+}
+
+type UsersWithFilteredRelationsRow_notes struct {
+	Archived  *int64  // "archived"
+	Author_id *int64  // "author_id"
+	Body      *string // "body"
+	Id        *int64  // "id"
+}
+
 type UsersWithCappedPostsRow struct {
 	CappedPosts []UsersWithCappedPostsRow_cappedPosts // "cappedPosts"
 	Id          *int64                                // "id"
@@ -1693,6 +1737,602 @@ func PostsWithAuthor(ctx context.Context) ([]PostsWithAuthorRow, error) {
 		produced_n3 = true
 	}
 	return t_n3, nil
+}
+
+// Notes — the STRUCT-RETURNING combined read (bc#77/#87): the fully
+// de-plumbed path. Ports are a native struct (direct field assignment); the handler
+// result is materialized straight into the node's outType struct. Node results are typed
+// struct locals; a relation child reads the parent's REAL struct result via direct field
+// access (child-present decision from the real parent value — relation / connection
+// converge). A strictly-sequential plan is a plain statement list (no plan driver); a
+// real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
+// per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
+// of known size, with a sync.WaitGroup; preflight + interpret are committed in ascending
+// index order so the observed value / op multiset / failure precedence byte-match run_behavior
+// (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
+// struct/value assembled by struct literal + field access — the consumer keeps it native.
+func Notes(ctx context.Context) ([]NotesRow, error) {
+	var t_n0 []NotesRow
+	produced_n0 := false
+	_ = t_n0
+	_ = produced_n0
+	// ── op 'n0' (executeSQL) ──
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(int64(0))})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, body, archived FROM conf_notes WHERE (archived = ?) ORDER BY id ASC")}})
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
+	if wire_n0Err != nil {
+		return nil, opFailed("n0", "fail", wire_n0Err)
+	}
+	p0 := wire_n0.AsList()
+	if p0.Kind == probeGot {
+		var at1 [4]int
+		list0 := make([]NotesRow, 0, p0.Got.Len())
+		for i0 := 0; i0 < p0.Got.Len(); i0++ {
+			var el0 NotesRow
+			p1 := p0.Got.ElemRow(i0)
+			if p1.Kind == probeGot {
+				var rec1 NotesRow
+				p2 := p1.Got.ProbeIntAt("archived", &at1[0])
+				if p2.Kind == probeGot {
+					rec1.Archived = &p2.Got
+				} else if p2.Kind == probeWrong {
+					return nil, deTypeMismatch("NotesRow", "archived", "opt(int)", p2.ActualWireType, p2.Raw)
+				}
+				p3 := p1.Got.ProbeIntAt("author_id", &at1[1])
+				if p3.Kind == probeGot {
+					rec1.Author_id = &p3.Got
+				} else if p3.Kind == probeWrong {
+					return nil, deTypeMismatch("NotesRow", "author_id", "opt(int)", p3.ActualWireType, p3.Raw)
+				}
+				p4 := p1.Got.ProbeStringAt("body", &at1[2])
+				if p4.Kind == probeGot {
+					sv4 := p4.Got
+					rec1.Body = &sv4
+				} else if p4.Kind == probeWrong {
+					return nil, deTypeMismatch("NotesRow", "body", "opt(string)", p4.ActualWireType, p4.Raw)
+				}
+				p5 := p1.Got.ProbeIntAt("id", &at1[3])
+				if p5.Kind == probeGot {
+					rec1.Id = &p5.Got
+				} else if p5.Kind == probeWrong {
+					return nil, deTypeMismatch("NotesRow", "id", "opt(int)", p5.ActualWireType, p5.Raw)
+				}
+				el0 = rec1
+			} else if p1.Kind == probeWrong {
+				return nil, deTypeMismatch("n0", "n0", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}", p1.ActualWireType, p1.Raw)
+			} else if p1.Kind == probeNull {
+				return nil, deTypeMismatch("n0", "n0", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}", p1.ActualWireType, p1.Raw)
+			} else {
+				return nil, deMissingField("n0", "n0", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}")
+			}
+			list0 = append(list0, el0)
+		}
+		t_n0 = list0
+	} else if p0.Kind == probeWrong {
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})", p0.ActualWireType, p0.Raw)
+	} else if p0.Kind == probeNull {
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})", p0.ActualWireType, p0.Raw)
+	} else {
+		return nil, deMissingField("n0", "n0", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})")
+	}
+	produced_n0 = true
+	return t_n0, nil
+}
+
+// NotesByAuthor — the STRUCT-RETURNING combined read (bc#77/#87): the fully
+// de-plumbed path. Ports are a native struct (direct field assignment); the handler
+// result is materialized straight into the node's outType struct. Node results are typed
+// struct locals; a relation child reads the parent's REAL struct result via direct field
+// access (child-present decision from the real parent value — relation / connection
+// converge). A strictly-sequential plan is a plain statement list (no plan driver); a
+// real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
+// per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
+// of known size, with a sync.WaitGroup; preflight + interpret are committed in ascending
+// index order so the observed value / op multiset / failure precedence byte-match run_behavior
+// (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
+// struct/value assembled by struct literal + field access — the consumer keeps it native.
+func NotesByAuthor(ctx context.Context, authorId int64) ([]NotesByAuthorRow, error) {
+	var t_n0 []NotesByAuthorRow
+	produced_n0 := false
+	_ = t_n0
+	_ = produced_n0
+	// ── op 'n0' (executeSQL) ──
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireInt(authorId), wire.WireInt(int64(0))})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, body, archived FROM conf_notes WHERE author_id = ? AND (archived = ?) ORDER BY id ASC")}})
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
+	if wire_n0Err != nil {
+		return nil, opFailed("n0", "fail", wire_n0Err)
+	}
+	p0 := wire_n0.AsList()
+	if p0.Kind == probeGot {
+		var at1 [4]int
+		list0 := make([]NotesByAuthorRow, 0, p0.Got.Len())
+		for i0 := 0; i0 < p0.Got.Len(); i0++ {
+			var el0 NotesByAuthorRow
+			p1 := p0.Got.ElemRow(i0)
+			if p1.Kind == probeGot {
+				var rec1 NotesByAuthorRow
+				p2 := p1.Got.ProbeIntAt("archived", &at1[0])
+				if p2.Kind == probeGot {
+					rec1.Archived = &p2.Got
+				} else if p2.Kind == probeWrong {
+					return nil, deTypeMismatch("NotesByAuthorRow", "archived", "opt(int)", p2.ActualWireType, p2.Raw)
+				}
+				p3 := p1.Got.ProbeIntAt("author_id", &at1[1])
+				if p3.Kind == probeGot {
+					rec1.Author_id = &p3.Got
+				} else if p3.Kind == probeWrong {
+					return nil, deTypeMismatch("NotesByAuthorRow", "author_id", "opt(int)", p3.ActualWireType, p3.Raw)
+				}
+				p4 := p1.Got.ProbeStringAt("body", &at1[2])
+				if p4.Kind == probeGot {
+					sv4 := p4.Got
+					rec1.Body = &sv4
+				} else if p4.Kind == probeWrong {
+					return nil, deTypeMismatch("NotesByAuthorRow", "body", "opt(string)", p4.ActualWireType, p4.Raw)
+				}
+				p5 := p1.Got.ProbeIntAt("id", &at1[3])
+				if p5.Kind == probeGot {
+					rec1.Id = &p5.Got
+				} else if p5.Kind == probeWrong {
+					return nil, deTypeMismatch("NotesByAuthorRow", "id", "opt(int)", p5.ActualWireType, p5.Raw)
+				}
+				el0 = rec1
+			} else if p1.Kind == probeWrong {
+				return nil, deTypeMismatch("n0", "n0", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}", p1.ActualWireType, p1.Raw)
+			} else if p1.Kind == probeNull {
+				return nil, deTypeMismatch("n0", "n0", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}", p1.ActualWireType, p1.Raw)
+			} else {
+				return nil, deMissingField("n0", "n0", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}")
+			}
+			list0 = append(list0, el0)
+		}
+		t_n0 = list0
+	} else if p0.Kind == probeWrong {
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})", p0.ActualWireType, p0.Raw)
+	} else if p0.Kind == probeNull {
+		return nil, deTypeMismatch("n0", "n0", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})", p0.ActualWireType, p0.Raw)
+	} else {
+		return nil, deMissingField("n0", "n0", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})")
+	}
+	produced_n0 = true
+	return t_n0, nil
+}
+
+// UsersWithFilteredRelations — the STRUCT-RETURNING combined read (bc#77/#87): the fully
+// de-plumbed path. Ports are a native struct (direct field assignment); the handler
+// result is materialized straight into the node's outType struct. Node results are typed
+// struct locals; a relation child reads the parent's REAL struct result via direct field
+// access (child-present decision from the real parent value — relation / connection
+// converge). A strictly-sequential plan is a plain statement list (no plan driver); a
+// real-concurrency stage (bc#87) is EXPLICIT static parallel orchestration — one goroutine
+// per statically-known parallel op, bounded by the static plan.concurrency via a semaphore
+// of known size, with a sync.WaitGroup; preflight + interpret are committed in ascending
+// index order so the observed value / op multiset / failure precedence byte-match run_behavior
+// (the goroutine spawn is the ONLY runtime element — the WHAT is baked). The output is a typed
+// struct/value assembled by struct literal + field access — the consumer keeps it native.
+func UsersWithFilteredRelations(ctx context.Context) ([]UsersWithFilteredRelationsRow, error) {
+	var t_n0 []wire.WireValue
+	produced_n0 := false
+	_ = t_n0
+	_ = produced_n0
+	var t_n1 []wire.WireValue
+	produced_n1 := false
+	_ = t_n1
+	_ = produced_n1
+	var t_n2 []wire.WireValue
+	produced_n2 := false
+	_ = t_n2
+	_ = produced_n2
+	var t_n3 []wire.WireValue
+	produced_n3 := false
+	_ = t_n3
+	_ = produced_n3
+	var t_n4 []wire.WireValue
+	produced_n4 := false
+	_ = t_n4
+	_ = produced_n4
+	var t_n5 []wire.WireValue
+	produced_n5 := false
+	_ = t_n5
+	_ = produced_n5
+	var t_n6 []wire.WireValue
+	produced_n6 := false
+	_ = t_n6
+	_ = produced_n6
+	var t_n7 []wire.WireValue
+	produced_n7 := false
+	_ = t_n7
+	_ = produced_n7
+	var t_n8 []wire.WireValue
+	produced_n8 := false
+	_ = t_n8
+	_ = produced_n8
+	var t_n9 []UsersWithFilteredRelationsRow
+	produced_n9 := false
+	_ = t_n9
+	_ = produced_n9
+	// ── op 'n0' (executeSQL) ──
+	payload_n0 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, name FROM conf_users ORDER BY id ASC")}})
+	wire_n0, wire_n0Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n0)
+	if wire_n0Err != nil {
+		return nil, opFailed("n0", "fail", wire_n0Err)
+	}
+	p0 := wire_n0.AsList()
+	if p0.Kind == probeGot {
+		t_n0 = wire_n0.Items
+	} else if p0.Kind == probeWrong {
+		return nil, deTypeMismatch("n0", "n0", "arr(value)", p0.ActualWireType, p0.Raw)
+	} else if p0.Kind == probeNull {
+		return nil, deTypeMismatch("n0", "n0", "arr(value)", p0.ActualWireType, p0.Raw)
+	} else {
+		return nil, deMissingField("n0", "n0", "arr(value)")
+	}
+	produced_n0 = true
+	// ── op 'n1' (pluck, parent:n0) ──
+	if produced_n0 {
+		payload_n1 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "col", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "rows", Val: wire.WireListOf(t_n0)}})
+		wire_n1, wire_n1Err := litedbmodel_runtime.PluckKeys(ctx, payload_n1)
+		if wire_n1Err != nil {
+			return nil, opFailed("n1", "fail", wire_n1Err)
+		}
+		p1 := wire_n1.AsList()
+		if p1.Kind == probeGot {
+			t_n1 = wire_n1.Items
+		} else if p1.Kind == probeWrong {
+			return nil, deTypeMismatch("n1", "n1", "arr(value)", p1.ActualWireType, p1.Raw)
+		} else if p1.Kind == probeNull {
+			return nil, deTypeMismatch("n1", "n1", "arr(value)", p1.ActualWireType, p1.Raw)
+		} else {
+			return nil, deMissingField("n1", "n1", "arr(value)")
+		}
+		produced_n1 = true
+	}
+	// ── op 'n2' (executeSQL, parent:n1) ──
+	if produced_n1 {
+		payload_n2 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n1), wire.WireStr("live")})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt) AND status = ? ORDER BY id ASC")}})
+		wire_n2, wire_n2Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n2)
+		if wire_n2Err != nil {
+			return nil, opFailed("n2", "fail", wire_n2Err)
+		}
+		p2 := wire_n2.AsList()
+		if p2.Kind == probeGot {
+			t_n2 = wire_n2.Items
+		} else if p2.Kind == probeWrong {
+			return nil, deTypeMismatch("n2", "n2", "arr(value)", p2.ActualWireType, p2.Raw)
+		} else if p2.Kind == probeNull {
+			return nil, deTypeMismatch("n2", "n2", "arr(value)", p2.ActualWireType, p2.Raw)
+		} else {
+			return nil, deMissingField("n2", "n2", "arr(value)")
+		}
+		produced_n2 = true
+	}
+	// ── op 'n3' (group, parent:n0) ──
+	if produced_n0 {
+		payload_n3 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "children", Val: wire.WireListOf(t_n2)}, wire.WireField{Key: "fk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"author_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "into", Val: wire.WireStr("livePosts")}, wire.WireField{Key: "parents", Val: wire.WireListOf(t_n0)}, wire.WireField{Key: "pk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "single", Val: wire.WireBool(false)}})
+		wire_n3, wire_n3Err := litedbmodel_runtime.GroupChildren(ctx, payload_n3)
+		if wire_n3Err != nil {
+			return nil, opFailed("n3", "fail", wire_n3Err)
+		}
+		p3 := wire_n3.AsList()
+		if p3.Kind == probeGot {
+			t_n3 = wire_n3.Items
+		} else if p3.Kind == probeWrong {
+			return nil, deTypeMismatch("n3", "n3", "arr(value)", p3.ActualWireType, p3.Raw)
+		} else if p3.Kind == probeNull {
+			return nil, deTypeMismatch("n3", "n3", "arr(value)", p3.ActualWireType, p3.Raw)
+		} else {
+			return nil, deMissingField("n3", "n3", "arr(value)")
+		}
+		produced_n3 = true
+	}
+	// ── op 'n4' (pluck, parent:n3) ──
+	if produced_n3 {
+		payload_n4 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "col", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "rows", Val: wire.WireListOf(t_n3)}})
+		wire_n4, wire_n4Err := litedbmodel_runtime.PluckKeys(ctx, payload_n4)
+		if wire_n4Err != nil {
+			return nil, opFailed("n4", "fail", wire_n4Err)
+		}
+		p4 := wire_n4.AsList()
+		if p4.Kind == probeGot {
+			t_n4 = wire_n4.Items
+		} else if p4.Kind == probeWrong {
+			return nil, deTypeMismatch("n4", "n4", "arr(value)", p4.ActualWireType, p4.Raw)
+		} else if p4.Kind == probeNull {
+			return nil, deTypeMismatch("n4", "n4", "arr(value)", p4.ActualWireType, p4.Raw)
+		} else {
+			return nil, deMissingField("n4", "n4", "arr(value)")
+		}
+		produced_n4 = true
+	}
+	// ── op 'n5' (executeSQL, parent:n4) ──
+	if produced_n4 {
+		payload_n5 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n4), wire.WireInt(int64(0))})}, wire.WireField{Key: "sql", Val: wire.WireStr("SELECT id, author_id, body, archived FROM conf_notes WHERE author_id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt) AND (archived = ?) ORDER BY id ASC")}})
+		wire_n5, wire_n5Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n5)
+		if wire_n5Err != nil {
+			return nil, opFailed("n5", "fail", wire_n5Err)
+		}
+		p5 := wire_n5.AsList()
+		if p5.Kind == probeGot {
+			t_n5 = wire_n5.Items
+		} else if p5.Kind == probeWrong {
+			return nil, deTypeMismatch("n5", "n5", "arr(value)", p5.ActualWireType, p5.Raw)
+		} else if p5.Kind == probeNull {
+			return nil, deTypeMismatch("n5", "n5", "arr(value)", p5.ActualWireType, p5.Raw)
+		} else {
+			return nil, deMissingField("n5", "n5", "arr(value)")
+		}
+		produced_n5 = true
+	}
+	// ── op 'n6' (group, parent:n3) ──
+	if produced_n3 {
+		payload_n6 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "children", Val: wire.WireListOf(t_n5)}, wire.WireField{Key: "fk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"author_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "into", Val: wire.WireStr("notes")}, wire.WireField{Key: "parents", Val: wire.WireListOf(t_n3)}, wire.WireField{Key: "pk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "single", Val: wire.WireBool(false)}})
+		wire_n6, wire_n6Err := litedbmodel_runtime.GroupChildren(ctx, payload_n6)
+		if wire_n6Err != nil {
+			return nil, opFailed("n6", "fail", wire_n6Err)
+		}
+		p6 := wire_n6.AsList()
+		if p6.Kind == probeGot {
+			t_n6 = wire_n6.Items
+		} else if p6.Kind == probeWrong {
+			return nil, deTypeMismatch("n6", "n6", "arr(value)", p6.ActualWireType, p6.Raw)
+		} else if p6.Kind == probeNull {
+			return nil, deTypeMismatch("n6", "n6", "arr(value)", p6.ActualWireType, p6.Raw)
+		} else {
+			return nil, deMissingField("n6", "n6", "arr(value)")
+		}
+		produced_n6 = true
+	}
+	// ── op 'n7' (pluck, parent:n6) ──
+	if produced_n6 {
+		payload_n7 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "col", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "rows", Val: wire.WireListOf(t_n6)}})
+		wire_n7, wire_n7Err := litedbmodel_runtime.PluckKeys(ctx, payload_n7)
+		if wire_n7Err != nil {
+			return nil, opFailed("n7", "fail", wire_n7Err)
+		}
+		p7 := wire_n7.AsList()
+		if p7.Kind == probeGot {
+			t_n7 = wire_n7.Items
+		} else if p7.Kind == probeWrong {
+			return nil, deTypeMismatch("n7", "n7", "arr(value)", p7.ActualWireType, p7.Raw)
+		} else if p7.Kind == probeNull {
+			return nil, deTypeMismatch("n7", "n7", "arr(value)", p7.ActualWireType, p7.Raw)
+		} else {
+			return nil, deMissingField("n7", "n7", "arr(value)")
+		}
+		produced_n7 = true
+	}
+	// ── op 'n8' (executeSQL, parent:n7) ──
+	if produced_n7 {
+		payload_n8 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "params", Val: wire.WireListOf([]wire.WireValue{wire.WireListOf(t_n7), wire.WireInt(int64(0))})}, wire.WireField{Key: "sql", Val: wire.WireStr("WITH ranked AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY author_id ORDER BY id DESC) AS _rn FROM conf_notes WHERE author_id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt) AND (archived = ?)) SELECT * FROM ranked WHERE _rn <= 1")}})
+		wire_n8, wire_n8Err := litedbmodel_runtime.ExecuteSQL(ctx, payload_n8)
+		if wire_n8Err != nil {
+			return nil, opFailed("n8", "fail", wire_n8Err)
+		}
+		p8 := wire_n8.AsList()
+		if p8.Kind == probeGot {
+			t_n8 = wire_n8.Items
+		} else if p8.Kind == probeWrong {
+			return nil, deTypeMismatch("n8", "n8", "arr(value)", p8.ActualWireType, p8.Raw)
+		} else if p8.Kind == probeNull {
+			return nil, deTypeMismatch("n8", "n8", "arr(value)", p8.ActualWireType, p8.Raw)
+		} else {
+			return nil, deMissingField("n8", "n8", "arr(value)")
+		}
+		produced_n8 = true
+	}
+	// ── op 'n9' (group, parent:n6) ──
+	if produced_n6 {
+		payload_n9 := wire.WireRowOfFields([]wire.WireField{wire.WireField{Key: "children", Val: wire.WireListOf(t_n8)}, wire.WireField{Key: "fk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"author_id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "into", Val: wire.WireStr("latestNote")}, wire.WireField{Key: "parents", Val: wire.WireListOf(t_n6)}, wire.WireField{Key: "pk", Val: func() wire.WireValue { it0 := []wire.WireValue{}; for _, e0 := range []string{"id"} { it0 = append(it0, wire.WireStr(e0)) }; return wire.WireListOf(it0) }()}, wire.WireField{Key: "single", Val: wire.WireBool(false)}})
+		wire_n9, wire_n9Err := litedbmodel_runtime.GroupChildren(ctx, payload_n9)
+		if wire_n9Err != nil {
+			return nil, opFailed("n9", "fail", wire_n9Err)
+		}
+		p9 := wire_n9.AsList()
+		if p9.Kind == probeGot {
+			var at10 [5]int
+			var at13 [4]int
+			var at19 [5]int
+			var at27 [4]int
+			list9 := make([]UsersWithFilteredRelationsRow, 0, p9.Got.Len())
+			for i9 := 0; i9 < p9.Got.Len(); i9++ {
+				var el9 UsersWithFilteredRelationsRow
+				p10 := p9.Got.ElemRow(i9)
+				if p10.Kind == probeGot {
+					var rec10 UsersWithFilteredRelationsRow
+					p11 := p10.Got.ProbeIntAt("id", &at10[0])
+					if p11.Kind == probeGot {
+						rec10.Id = &p11.Got
+					} else if p11.Kind == probeWrong {
+						return nil, deTypeMismatch("UsersWithFilteredRelationsRow", "id", "opt(int)", p11.ActualWireType, p11.Raw)
+					}
+					p12 := p10.Got.ProbeListAt("latestNote", &at10[1])
+					if p12.Kind == probeGot {
+						list12 := make([]UsersWithFilteredRelationsRow_latestNote, 0, p12.Got.Len())
+						for i12 := 0; i12 < p12.Got.Len(); i12++ {
+							var el12 UsersWithFilteredRelationsRow_latestNote
+							p13 := p12.Got.ElemRow(i12)
+							if p13.Kind == probeGot {
+								var rec13 UsersWithFilteredRelationsRow_latestNote
+								p14 := p13.Got.ProbeIntAt("archived", &at13[0])
+								if p14.Kind == probeGot {
+									rec13.Archived = &p14.Got
+								} else if p14.Kind == probeWrong {
+									return nil, deTypeMismatch("UsersWithFilteredRelationsRow_latestNote", "archived", "opt(int)", p14.ActualWireType, p14.Raw)
+								}
+								p15 := p13.Got.ProbeIntAt("author_id", &at13[1])
+								if p15.Kind == probeGot {
+									rec13.Author_id = &p15.Got
+								} else if p15.Kind == probeWrong {
+									return nil, deTypeMismatch("UsersWithFilteredRelationsRow_latestNote", "author_id", "opt(int)", p15.ActualWireType, p15.Raw)
+								}
+								p16 := p13.Got.ProbeStringAt("body", &at13[2])
+								if p16.Kind == probeGot {
+									sv16 := p16.Got
+									rec13.Body = &sv16
+								} else if p16.Kind == probeWrong {
+									return nil, deTypeMismatch("UsersWithFilteredRelationsRow_latestNote", "body", "opt(string)", p16.ActualWireType, p16.Raw)
+								}
+								p17 := p13.Got.ProbeIntAt("id", &at13[3])
+								if p17.Kind == probeGot {
+									rec13.Id = &p17.Got
+								} else if p17.Kind == probeWrong {
+									return nil, deTypeMismatch("UsersWithFilteredRelationsRow_latestNote", "id", "opt(int)", p17.ActualWireType, p17.Raw)
+								}
+								el12 = rec13
+							} else if p13.Kind == probeWrong {
+								return nil, deTypeMismatch("UsersWithFilteredRelationsRow", "latestNote", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}", p13.ActualWireType, p13.Raw)
+							} else if p13.Kind == probeNull {
+								return nil, deTypeMismatch("UsersWithFilteredRelationsRow", "latestNote", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}", p13.ActualWireType, p13.Raw)
+							} else {
+								return nil, deMissingField("UsersWithFilteredRelationsRow", "latestNote", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}")
+							}
+							list12 = append(list12, el12)
+						}
+						rec10.LatestNote = list12
+					} else if p12.Kind == probeWrong {
+						return nil, deTypeMismatch("UsersWithFilteredRelationsRow", "latestNote", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})", p12.ActualWireType, p12.Raw)
+					} else if p12.Kind == probeNull {
+						return nil, deTypeMismatch("UsersWithFilteredRelationsRow", "latestNote", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})", p12.ActualWireType, p12.Raw)
+					} else {
+						return nil, deMissingField("UsersWithFilteredRelationsRow", "latestNote", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})")
+					}
+					p18 := p10.Got.ProbeListAt("livePosts", &at10[2])
+					if p18.Kind == probeGot {
+						list18 := make([]UsersWithFilteredRelationsRow_livePosts, 0, p18.Got.Len())
+						for i18 := 0; i18 < p18.Got.Len(); i18++ {
+							var el18 UsersWithFilteredRelationsRow_livePosts
+							p19 := p18.Got.ElemRow(i18)
+							if p19.Kind == probeGot {
+								var rec19 UsersWithFilteredRelationsRow_livePosts
+								p20 := p19.Got.ProbeIntAt("author_id", &at19[0])
+								if p20.Kind == probeGot {
+									rec19.Author_id = &p20.Got
+								} else if p20.Kind == probeWrong {
+									return nil, deTypeMismatch("UsersWithFilteredRelationsRow_livePosts", "author_id", "opt(int)", p20.ActualWireType, p20.Raw)
+								}
+								p21 := p19.Got.ProbeStringAt("created_at", &at19[1])
+								if p21.Kind == probeGot {
+									sv21 := p21.Got
+									rec19.Created_at = &sv21
+								} else if p21.Kind == probeWrong {
+									return nil, deTypeMismatch("UsersWithFilteredRelationsRow_livePosts", "created_at", "opt(string)", p21.ActualWireType, p21.Raw)
+								}
+								p22 := p19.Got.ProbeIntAt("id", &at19[2])
+								if p22.Kind == probeGot {
+									rec19.Id = &p22.Got
+								} else if p22.Kind == probeWrong {
+									return nil, deTypeMismatch("UsersWithFilteredRelationsRow_livePosts", "id", "opt(int)", p22.ActualWireType, p22.Raw)
+								}
+								p23 := p19.Got.ProbeStringAt("status", &at19[3])
+								if p23.Kind == probeGot {
+									sv23 := p23.Got
+									rec19.Status = &sv23
+								} else if p23.Kind == probeWrong {
+									return nil, deTypeMismatch("UsersWithFilteredRelationsRow_livePosts", "status", "opt(string)", p23.ActualWireType, p23.Raw)
+								}
+								p24 := p19.Got.ProbeStringAt("title", &at19[4])
+								if p24.Kind == probeGot {
+									sv24 := p24.Got
+									rec19.Title = &sv24
+								} else if p24.Kind == probeWrong {
+									return nil, deTypeMismatch("UsersWithFilteredRelationsRow_livePosts", "title", "opt(string)", p24.ActualWireType, p24.Raw)
+								}
+								el18 = rec19
+							} else if p19.Kind == probeWrong {
+								return nil, deTypeMismatch("UsersWithFilteredRelationsRow", "livePosts", "obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}", p19.ActualWireType, p19.Raw)
+							} else if p19.Kind == probeNull {
+								return nil, deTypeMismatch("UsersWithFilteredRelationsRow", "livePosts", "obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}", p19.ActualWireType, p19.Raw)
+							} else {
+								return nil, deMissingField("UsersWithFilteredRelationsRow", "livePosts", "obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}")
+							}
+							list18 = append(list18, el18)
+						}
+						rec10.LivePosts = list18
+					} else if p18.Kind == probeWrong {
+						return nil, deTypeMismatch("UsersWithFilteredRelationsRow", "livePosts", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})", p18.ActualWireType, p18.Raw)
+					} else if p18.Kind == probeNull {
+						return nil, deTypeMismatch("UsersWithFilteredRelationsRow", "livePosts", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})", p18.ActualWireType, p18.Raw)
+					} else {
+						return nil, deMissingField("UsersWithFilteredRelationsRow", "livePosts", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})")
+					}
+					p25 := p10.Got.ProbeStringAt("name", &at10[3])
+					if p25.Kind == probeGot {
+						sv25 := p25.Got
+						rec10.Name = &sv25
+					} else if p25.Kind == probeWrong {
+						return nil, deTypeMismatch("UsersWithFilteredRelationsRow", "name", "opt(string)", p25.ActualWireType, p25.Raw)
+					}
+					p26 := p10.Got.ProbeListAt("notes", &at10[4])
+					if p26.Kind == probeGot {
+						list26 := make([]UsersWithFilteredRelationsRow_notes, 0, p26.Got.Len())
+						for i26 := 0; i26 < p26.Got.Len(); i26++ {
+							var el26 UsersWithFilteredRelationsRow_notes
+							p27 := p26.Got.ElemRow(i26)
+							if p27.Kind == probeGot {
+								var rec27 UsersWithFilteredRelationsRow_notes
+								p28 := p27.Got.ProbeIntAt("archived", &at27[0])
+								if p28.Kind == probeGot {
+									rec27.Archived = &p28.Got
+								} else if p28.Kind == probeWrong {
+									return nil, deTypeMismatch("UsersWithFilteredRelationsRow_notes", "archived", "opt(int)", p28.ActualWireType, p28.Raw)
+								}
+								p29 := p27.Got.ProbeIntAt("author_id", &at27[1])
+								if p29.Kind == probeGot {
+									rec27.Author_id = &p29.Got
+								} else if p29.Kind == probeWrong {
+									return nil, deTypeMismatch("UsersWithFilteredRelationsRow_notes", "author_id", "opt(int)", p29.ActualWireType, p29.Raw)
+								}
+								p30 := p27.Got.ProbeStringAt("body", &at27[2])
+								if p30.Kind == probeGot {
+									sv30 := p30.Got
+									rec27.Body = &sv30
+								} else if p30.Kind == probeWrong {
+									return nil, deTypeMismatch("UsersWithFilteredRelationsRow_notes", "body", "opt(string)", p30.ActualWireType, p30.Raw)
+								}
+								p31 := p27.Got.ProbeIntAt("id", &at27[3])
+								if p31.Kind == probeGot {
+									rec27.Id = &p31.Got
+								} else if p31.Kind == probeWrong {
+									return nil, deTypeMismatch("UsersWithFilteredRelationsRow_notes", "id", "opt(int)", p31.ActualWireType, p31.Raw)
+								}
+								el26 = rec27
+							} else if p27.Kind == probeWrong {
+								return nil, deTypeMismatch("UsersWithFilteredRelationsRow", "notes", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}", p27.ActualWireType, p27.Raw)
+							} else if p27.Kind == probeNull {
+								return nil, deTypeMismatch("UsersWithFilteredRelationsRow", "notes", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}", p27.ActualWireType, p27.Raw)
+							} else {
+								return nil, deMissingField("UsersWithFilteredRelationsRow", "notes", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}")
+							}
+							list26 = append(list26, el26)
+						}
+						rec10.Notes = list26
+					} else if p26.Kind == probeWrong {
+						return nil, deTypeMismatch("UsersWithFilteredRelationsRow", "notes", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})", p26.ActualWireType, p26.Raw)
+					} else if p26.Kind == probeNull {
+						return nil, deTypeMismatch("UsersWithFilteredRelationsRow", "notes", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})", p26.ActualWireType, p26.Raw)
+					} else {
+						return nil, deMissingField("UsersWithFilteredRelationsRow", "notes", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})")
+					}
+					el9 = rec10
+				} else if p10.Kind == probeWrong {
+					return nil, deTypeMismatch("n9", "n9", "obj{id:opt(int),latestNote:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}),livePosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}),name:opt(string),notes:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})}", p10.ActualWireType, p10.Raw)
+				} else if p10.Kind == probeNull {
+					return nil, deTypeMismatch("n9", "n9", "obj{id:opt(int),latestNote:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}),livePosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}),name:opt(string),notes:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})}", p10.ActualWireType, p10.Raw)
+				} else {
+					return nil, deMissingField("n9", "n9", "obj{id:opt(int),latestNote:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}),livePosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}),name:opt(string),notes:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})}")
+				}
+				list9 = append(list9, el9)
+			}
+			t_n9 = list9
+		} else if p9.Kind == probeWrong {
+			return nil, deTypeMismatch("n9", "n9", "arr(obj{id:opt(int),latestNote:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}),livePosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}),name:opt(string),notes:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})})", p9.ActualWireType, p9.Raw)
+		} else if p9.Kind == probeNull {
+			return nil, deTypeMismatch("n9", "n9", "arr(obj{id:opt(int),latestNote:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}),livePosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}),name:opt(string),notes:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})})", p9.ActualWireType, p9.Raw)
+		} else {
+			return nil, deMissingField("n9", "n9", "arr(obj{id:opt(int),latestNote:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}),livePosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}),name:opt(string),notes:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})})")
+		}
+		produced_n9 = true
+	}
+	return t_n9, nil
 }
 
 // UsersWithCappedPosts — the STRUCT-RETURNING combined read (bc#77/#87): the fully
@@ -3543,4 +4183,4 @@ func RemoveTagsReturning(ctx context.Context, ids []int64) ([]RemoveTagsReturnin
 // Each is a 1:1 entry <Method>(<positional params>) -> (T, error): a native return; the consumer keeps the
 // model native (no Value serialization on the read hot path — the boxing residue bc#77 removes) and
 // supplies the op-agnostic leaf transport symbols the entry calls. See INTEGRATION.md §6.
-var ComponentNamesNativeRaw = []string{"posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "optionalOnlyFeed", "quotedOrderFeed", "quotedWhereOrderFeed", "viewFeed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createDoc", "createLine", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning"}
+var ComponentNamesNativeRaw = []string{"posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "optionalOnlyFeed", "quotedOrderFeed", "quotedWhereOrderFeed", "viewFeed", "usersWithPosts", "postsWithAuthor", "notes", "notesByAuthor", "usersWithFilteredRelations", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createDoc", "createLine", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning"}

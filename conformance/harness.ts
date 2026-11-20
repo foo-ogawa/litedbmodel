@@ -170,6 +170,18 @@ class ConfUser {
 
   @hasMany(() => [ConfUser.id, ConfPost.author_id], { order: () => ConfPost.id.asc(), limit: 1 })
   declare topPosts: Promise<ConfPost[]>;
+
+  // A relation's OWN conditions, which every surface (v1 lazy load, SCP batch, every generated
+  // module) must AND onto the key set: a declared `where`, and the target model's default filter
+  // (`conf_notes` declares `archived = 0`) — on an unlimited batch and on a per-parent `limit` window.
+  @hasMany(() => [ConfUser.id, ConfPost.author_id], { order: () => ConfPost.id.asc(), where: () => [[ConfPost.status, 'live']] })
+  declare livePosts: Promise<ConfPost[]>;
+
+  @hasMany(() => [ConfUser.id, ConfNote.author_id], { order: () => ConfNote.id.asc() })
+  declare notes: Promise<ConfNote[]>;
+
+  @hasMany(() => [ConfUser.id, ConfNote.author_id], { order: () => ConfNote.id.desc(), limit: 1 })
+  declare latestNote: Promise<ConfNote[]>;
 }
 
 @model('conf_posts')
@@ -203,6 +215,23 @@ class ConfTag {
   @column.text() label?: string;
 }
 
+
+/**
+ * The DEFAULT-FILTER fixture: `@model({ filter })` is auto-applied to every read of the model — a
+ * declared read and a relation batch that targets it alike. The seed archives note 2, so a read that
+ * drops the filter answers with it.
+ */
+@model('conf_notes', { filter: () => [[ConfNote.archived, 0]] })
+class ConfNote {
+  declare static id: Column<number, ConfNote>;
+  declare static author_id: Column<number, ConfNote>;
+  declare static archived: Column<number, ConfNote>;
+
+  @column.number({ primaryKey: true }) id?: number;
+  @column.number() author_id?: number;
+  @column.text() body?: string;
+  @column.number() archived?: number;
+}
 /**
  * The READ-DECODE fixture (#137). Every other model projects only INTEGER / TEXT columns, so the
  * date and boolean arms of the read decode — the ones each runtime resolves through its DRIVER, not
@@ -261,7 +290,7 @@ class ConfLine {
   @column.text() sku?: string;
 }
 
-const MODEL_REGISTRY: Record<string, unknown> = { ConfUser, ConfPost, ConfTag, ConfTyped, ConfDoc, ConfLine };
+const MODEL_REGISTRY: Record<string, unknown> = { ConfUser, ConfPost, ConfTag, ConfTyped, ConfDoc, ConfLine, ConfNote };
 
 /** Model NAME → class, as `relationDeclOf` resolves a relation's target model. */
 const conformanceModels = (name: string): ModelClassLike => MODEL_REGISTRY[name] as ModelClassLike;
@@ -424,6 +453,12 @@ const ENDPOINTS: EndpointSet = {
   },
   /** A belongsTo relation — the single-child nesting shape. */
   postsWithAuthor: { kind: 'read', model: ConfPost, order: 'id ASC', with: ['author'] },
+  /** A read of a model with a default filter — the filter ANDs onto the (here empty) declared WHERE. */
+  notes: { kind: 'read', model: ConfNote, order: 'id ASC' },
+  /** The same filter after a declared, bound predicate. */
+  notesByAuthor: { kind: 'read', model: ConfNote, where: [{ column: 'author_id', op: 'eq', param: 'authorId' }], order: 'id ASC' },
+  /** Relations carrying their own conditions: a declared `where`, and a filtered target with and without `limit`. */
+  usersWithFilteredRelations: { kind: 'read', model: ConfUser, select: ['id', 'name'], order: 'id ASC', with: ['livePosts', 'notes', 'latestNote'] },
   // The relation hard-limit guard TARGETS: the same user page over the three capped relation shapes.
   // The cap is resolved at EMIT (compileRelationOp) and baked onto the child fetch's `guard` port, so
   // which of these throws is decided entirely by the declaration + the config the vector carries.
@@ -564,6 +599,7 @@ const ENDPOINTS: EndpointSet = {
  * the evidence that a divergent result is the dialect SQL diverging, never the fixture.
  */
 export const SCHEMA: readonly string[] = [
+  'DROP TABLE IF EXISTS conf_notes',
   'DROP TABLE IF EXISTS conf_lines',
   'DROP TABLE IF EXISTS conf_docs',
   'DROP TABLE IF EXISTS conf_typed',
@@ -597,6 +633,11 @@ export const SCHEMA: readonly string[] = [
   // column alone observable (it would answer with the seeded line too).
   'CREATE TABLE conf_lines (order_id INT NOT NULL, line_no INT NOT NULL, sku TEXT NOT NULL, PRIMARY KEY (order_id, line_no))',
   "INSERT INTO conf_lines (order_id, line_no, sku) VALUES (10, 1, 'SKU-1')",
+  'CREATE TABLE conf_notes (id INT PRIMARY KEY, author_id INT NOT NULL, body TEXT NOT NULL, archived INT NOT NULL)',
+  "INSERT INTO conf_notes (id, author_id, body, archived) VALUES (1, 1, 'n1', 0)",
+  "INSERT INTO conf_notes (id, author_id, body, archived) VALUES (2, 1, 'n2 archived', 1)",
+  "INSERT INTO conf_notes (id, author_id, body, archived) VALUES (3, 2, 'n3', 0)",
+  "INSERT INTO conf_notes (id, author_id, body, archived) VALUES (4, 3, 'n4 archived', 1)",
 ];
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1147,6 +1188,23 @@ const EXEC_CASES: readonly ExecCase[] = [
     entry: 'postsWithAuthor',
     input: {},
     relationFields: { author: ['id', 'name', 'post_count'] },
+  },
+  // The default filter (`conf_notes`: `archived = 0`) on a declared read, alone and after a bound
+  // predicate: note 2 (author 1) and note 4 (author 3) are archived and never answer.
+  { id: 'notes: the model default filter applies to a declared read', entry: 'notes', input: {} },
+  { id: 'notesByAuthor: the default filter ANDs after a bound predicate', entry: 'notesByAuthor', input: { authorId: 1 } },
+  {
+    // `livePosts` ANDs its declared `where` (Ada's draft post 11 never answers); `notes` / `latestNote`
+    // AND the target's default filter on an unlimited batch and on a per-parent `limit 1` window — the
+    // window over Ada's notes picks note 1, not the archived (and newer) note 2.
+    id: 'usersWithFilteredRelations: a relation ANDs its where and the target default filter',
+    entry: 'usersWithFilteredRelations',
+    input: {},
+    relationFields: {
+      livePosts: ['id', 'author_id', 'title', 'status', 'created_at'],
+      notes: ['id', 'author_id', 'body', 'archived'],
+      latestNote: ['id', 'author_id', 'body', 'archived'],
+    },
   },
   {
     id: 'createPost: INSERT persists',

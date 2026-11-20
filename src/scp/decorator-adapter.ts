@@ -37,7 +37,9 @@ import type { DialectName } from './dialect';
 import type { InsertManyBuildOptions } from './makesql/compile-crud';
 import type { UpdateManyBuildOptions } from '../drivers/types';
 import { getColumnMeta, getRelationMeta, type ColumnMeta, type RelationMeta } from '../decorators';
-import { orderToString, type OrderSpec } from '../Column';
+import { orderToString, condsToRecord, type Conds, type OrderSpec } from '../Column';
+import { withDefaultFilter, type ConditionObject } from '../DBConditions';
+import { getTypeCast } from '../drivers';
 
 /**
  * The model's inline typed-column declaration: `table → (column → SQL type token)` — the consumer-inline
@@ -168,11 +170,24 @@ export interface ModelClassLike {
    * (`src/decorators.ts`). Absent ⇒ the default connection. See {@link connectionOf}.
    */
   readonly CONNECTION?: string;
+  /** The model's default filter — `@model(table, { filter })` (`src/decorators.ts`). See {@link findFilterOf}. */
+  readonly FIND_FILTER?: Conds | null;
 }
 
 /** The effective table name (v1 `@model` rule): explicit `TABLE_NAME`, else the model name lowercased. */
 export function tableNameOf(modelClass: ModelClassLike): string {
   return modelClass.TABLE_NAME ?? modelClass.name.toLowerCase();
+}
+
+/**
+ * The model's default filter (`@model({ filter })` → FIND_FILTER) as condition-object members, its values
+ * serialized for `dialect` — what a declared read and a relation batch AND on, as v1's select builder
+ * does for every `find`. `undefined` when the model declares none.
+ */
+export function findFilterOf(modelClass: ModelClassLike, dialect: DialectName): ConditionObject | undefined {
+  const filter = modelClass.FIND_FILTER;
+  if (!filter) return undefined;
+  return condsToRecord(filter, getTypeCast(dialect)) as ConditionObject;
 }
 
 /**
@@ -339,6 +354,14 @@ export function relationDeclOf(
   // database is the authority whatever the parent's is. Absent ⇒ the default connection (untagged, the
   // same-DB case every single-DB deployment is).
   const connection = connectionOf(targetModel);
+  // The relation's own conditions — its `where`, AND the target model's default filter — as v1
+  // `LazyRelation` applies them to every batch (`DBModel` builds the `where` record with the target's
+  // type cast; the select builder ANDs the filter as one group). Constants, bound after the key set.
+  const where = rel.options?.where?.();
+  const conditions = withDefaultFilter(
+    where !== undefined ? (condsToRecord(where, getTypeCast(dialect)) as ConditionObject) : undefined,
+    findFilterOf(targetModel, dialect),
+  );
   const base = {
     name: rel.propertyKey,
     kind: rel.type as RelationKind,
@@ -349,6 +372,7 @@ export function relationDeclOf(
     ...(order !== undefined ? { order } : {}),
     ...(rel.options?.limit !== undefined ? { limit: rel.options.limit } : {}),
     ...(rel.options?.hardLimit !== undefined ? { hardLimit: rel.options.hardLimit } : {}),
+    ...(Object.keys(conditions).length > 0 ? { conditions } : {}),
   };
   const decl: RelationDecl = parsed.composite
     ? { ...base, parentKeys: parsed.sourceKeys, targetKeys: parsed.targetKeys }

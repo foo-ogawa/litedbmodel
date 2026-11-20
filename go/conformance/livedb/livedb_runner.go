@@ -374,6 +374,24 @@ var dispatch = map[string]entryFn{
 		}
 		return my.PostsWithAuthor(ctx)
 	},
+	"notes": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
+		if postgres {
+			return pg.Notes(ctx)
+		}
+		return my.Notes(ctx)
+	},
+	"notesByAuthor": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
+		if postgres {
+			return pg.NotesByAuthor(ctx, i64(in, "authorId"))
+		}
+		return my.NotesByAuthor(ctx, i64(in, "authorId"))
+	},
+	"usersWithFilteredRelations": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
+		if postgres {
+			return pg.UsersWithFilteredRelations(ctx)
+		}
+		return my.UsersWithFilteredRelations(ctx)
+	},
 	"createPost": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
 		if postgres {
 			return pg.CreatePost(ctx, i64(in, "id"), i64(in, "authorId"), str(in, "title"), str(in, "status"), str(in, "createdAt"))

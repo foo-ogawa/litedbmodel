@@ -24,6 +24,7 @@ import { DBToken } from '../../DBValues';
 import { encodeJsonParam, mysqlJsonRead, mysqlKeyRead, type ColumnTypes } from './json-array';
 import type { Dialect } from './handler';
 import type { MakeSQL } from './makesql';
+import { takeScope, type ScopeFragment } from '../../drivers/types';
 
 /** MySQL/SQLite batch dialects. */
 export type JsonArrayDialect = 'mysql' | 'sqlite';
@@ -198,6 +199,8 @@ export interface JsonUpdateManyOptions {
   /** The DECLARED SQL types of the key + update columns, when the caller has the schema (MySQL, #381). */
   columnTypes?: ColumnTypes;
   returning?: string;
+  /** The model's default filter, ANDed after the statement's own predicate ({@link ScopeFragment}). */
+  scope?: ScopeFragment;
 }
 
 /**
@@ -210,7 +213,7 @@ export interface JsonUpdateManyOptions {
  *     SET u.c = IF(v._skip_c, u.c, v.c), …
  */
 export function mysqlUpdateManyJson(opts: JsonUpdateManyOptions): MakeSQL {
-  const { tableName, keyColumns, updateColumns, records, skipMap = new Map(), columnTypes, returning } = opts;
+  const { tableName, keyColumns, updateColumns, records, skipMap = new Map(), columnTypes, returning, scope } = opts;
   const allColumns = [...keyColumns, ...updateColumns];
 
   const skipColumnsNeeded = new Set<string>();
@@ -262,8 +265,12 @@ export function mysqlUpdateManyJson(opts: JsonUpdateManyOptions): MakeSQL {
     `JOIN JSON_TABLE(?, '$[*]' COLUMNS(${jtCols.join(', ')})) AS v ` +
     `ON ${onConditions.join(' AND ')} ` +
     `SET ${setClauses.join(', ')}`;
+  // The default filter, qualified by the target alias `u`; its values bind after the ONE JSON param.
+  const params: unknown[] = [jsonParam];
+  const filter = takeScope(scope, params, 'u');
+  if (filter !== '') sql += ` WHERE ${filter}`;
   if (returning) sql += ` RETURNING ${returning}`;
-  return { sql, params: [jsonParam] };
+  return { sql, params };
 }
 
 /**
@@ -284,7 +291,7 @@ export function mysqlUpdateManyJson(opts: JsonUpdateManyOptions): MakeSQL {
  * and the WHERE clause restricts affected rows to the keys present in the json array.
  */
 export function sqliteUpdateManyJson(opts: JsonUpdateManyOptions): MakeSQL {
-  const { tableName, keyColumns, updateColumns, records, skipMap = new Map(), returning } = opts;
+  const { tableName, keyColumns, updateColumns, records, skipMap = new Map(), returning, scope } = opts;
   const allColumns = [...keyColumns, ...updateColumns];
   const skipColumnsNeeded = new Set<string>();
   for (const s of skipMap.values()) for (const c of s) skipColumnsNeeded.add(c);
@@ -321,7 +328,8 @@ export function sqliteUpdateManyJson(opts: JsonUpdateManyOptions): MakeSQL {
   const target = keyColumns.length === 1 ? keyColumns[0] : `(${keyColumns.map((k) => `${tableName}.${k}`).join(', ')})`;
   const whereClause = `${target} IN (SELECT ${projected} FROM json_each(?))`;
 
-  let sql = `UPDATE ${tableName} SET ${setClauses.join(', ')} WHERE ${whereClause}`;
+  const filter = takeScope(scope, params);
+  let sql = `UPDATE ${tableName} SET ${setClauses.join(', ')} WHERE ${whereClause}${filter === '' ? '' : ` AND ${filter}`}`;
   if (returning) sql += ` RETURNING ${returning}`;
   return { sql, params };
 }

@@ -202,6 +202,12 @@ export interface InsertBuildOptions {
 }
 
 /**
+ * The model's default filter as a WHERE fragment, for the table alias the statement uses (if any).
+ * @internal
+ */
+export type ScopeFragment = (qualifier?: string) => SqlBuildResult | undefined;
+
+/**
  * Options for building batch UPDATE SQL
  * @internal
  */
@@ -218,6 +224,12 @@ export interface UpdateManyBuildOptions {
   skipMap?: Map<number, Set<string>>;
   /** RETURNING clause */
   returning?: string;
+  /**
+   * The model's default filter as a WHERE fragment (`(<filter>)` + its values) the statement ANDs AFTER
+   * its own predicate; the builder passes the alias it gives the table, if any, so the filter's columns
+   * are qualified by it. Absent / `undefined` result ⇒ no filter.
+   */
+  scope?: ScopeFragment;
 }
 
 /**
@@ -238,6 +250,12 @@ export interface SelectPkeysOptions {
   pkeyColumns: string[];
   keyColumns: string[];
   keyValues: unknown[][];
+  /**
+   * The model's default filter as a WHERE fragment (`(<filter>)` + its values) the statement ANDs AFTER
+   * its own predicate; the builder passes the alias it gives the table, if any, so the filter's columns
+   * are qualified by it. Absent / `undefined` result ⇒ no filter.
+   */
+  scope?: ScopeFragment;
 }
 
 /**
@@ -250,6 +268,12 @@ export interface FindByPkeysOptions {
   pkeyValues: unknown[][];
   selectColumn: string;
   sqlCastMap?: Map<string, string>;
+  /**
+   * The model's default filter as a WHERE fragment (`(<filter>)` + its values) the statement ANDs AFTER
+   * its own predicate; the builder passes the alias it gives the table, if any, so the filter's columns
+   * are qualified by it. Absent / `undefined` result ⇒ no filter.
+   */
+  scope?: ScopeFragment;
 }
 
 /**
@@ -304,3 +328,16 @@ export interface SqlBuilder {
   inferPgType?(val: unknown): string;
 }
 
+
+/**
+ * Take a statement's default-filter fragment: its values appended to `params` (AFTER the statement's
+ * own, which is where its text goes), its text returned — `''` when the model declares no filter. The
+ * caller joins it after its own predicate (` AND `) or opens a WHERE with it.
+ * @internal
+ */
+export function takeScope(scope: ScopeFragment | undefined, params: unknown[], qualifier?: string): string {
+  const fragment = scope?.(qualifier);
+  if (fragment === undefined) return '';
+  params.push(...fragment.params);
+  return fragment.sql;
+}

@@ -37,7 +37,7 @@ namespace {
         public const EXPECTED_SPEC_VERSIONS = ['behavior' => 6, 'expression' => 2, 'plan' => 1];
 
         /** The components on the native path (declaration order) — each a 1:1 entry <name>(<positional params>). */
-        public const COMPONENT_NAMES_NATIVE = ["posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "optionalOnlyFeed", "quotedOrderFeed", "quotedWhereOrderFeed", "viewFeed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createDoc", "createLine", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning"];
+        public const COMPONENT_NAMES_NATIVE = ["posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "optionalOnlyFeed", "quotedOrderFeed", "quotedWhereOrderFeed", "viewFeed", "usersWithPosts", "postsWithAuthor", "notes", "notesByAuthor", "usersWithFilteredRelations", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createDoc", "createLine", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning"];
 
         public static function posts(mixed $authorId): mixed
         {
@@ -914,6 +914,456 @@ namespace {
                 $produced_n3 = true;
             }
             return $t_n3;
+        }
+
+        public static function notes(): mixed
+        {
+            $t_n0 = null;
+            $produced_n0 = false;
+            // op 'n0' (executeSQL)
+            $payload_n0 = ["params" => [0], "sql" => "SELECT id, author_id, body, archived FROM conf_notes WHERE (archived = ?) ORDER BY id ASC"];
+            try {
+                $w_n0 = \LiteDbModel\Runtime\Leaves::executeSQL($payload_n0);
+            } catch (\Exception $err_n0) {
+                throw self::opFailed("n0", "fail", $err_n0);
+            }
+            if ((!(\is_array($w_n0) && \array_is_list($w_n0)))) {
+                throw self::mismatch("n0", "n0", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})", $w_n0);
+            }
+            $d1 = [];
+            foreach ($w_n0 as $d2) {
+                if ((!($d2 instanceof \stdClass))) {
+                    throw self::mismatch("n0", "n0", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}", $d2);
+                }
+                $d3 = new \stdClass();
+                if (\property_exists($d2, "archived")) {
+                    $d4 = $d2->archived;
+                    $d3->archived = (($d4 === null) ? null : self::deInt($d4, "NotesRow", "archived", "opt(int)"));
+                } else {
+                    $d3->archived = null;
+                }
+                if (\property_exists($d2, "author_id")) {
+                    $d5 = $d2->author_id;
+                    $d3->author_id = (($d5 === null) ? null : self::deInt($d5, "NotesRow", "author_id", "opt(int)"));
+                } else {
+                    $d3->author_id = null;
+                }
+                if (\property_exists($d2, "body")) {
+                    $d6 = $d2->body;
+                    $d3->body = (($d6 === null) ? null : self::deString($d6, "NotesRow", "body", "opt(string)"));
+                } else {
+                    $d3->body = null;
+                }
+                if (\property_exists($d2, "id")) {
+                    $d7 = $d2->id;
+                    $d3->id = (($d7 === null) ? null : self::deInt($d7, "NotesRow", "id", "opt(int)"));
+                } else {
+                    $d3->id = null;
+                }
+                $d1[] = $d3;
+            }
+            $t_n0 = $d1;
+            $produced_n0 = true;
+            return $t_n0;
+        }
+
+        public static function notesByAuthor(mixed $authorId): mixed
+        {
+            $t_n0 = null;
+            $produced_n0 = false;
+            // op 'n0' (executeSQL)
+            $payload_n0 = ["params" => [$authorId, 0], "sql" => "SELECT id, author_id, body, archived FROM conf_notes WHERE author_id = ? AND (archived = ?) ORDER BY id ASC"];
+            try {
+                $w_n0 = \LiteDbModel\Runtime\Leaves::executeSQL($payload_n0);
+            } catch (\Exception $err_n0) {
+                throw self::opFailed("n0", "fail", $err_n0);
+            }
+            if ((!(\is_array($w_n0) && \array_is_list($w_n0)))) {
+                throw self::mismatch("n0", "n0", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})", $w_n0);
+            }
+            $d1 = [];
+            foreach ($w_n0 as $d2) {
+                if ((!($d2 instanceof \stdClass))) {
+                    throw self::mismatch("n0", "n0", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}", $d2);
+                }
+                $d3 = new \stdClass();
+                if (\property_exists($d2, "archived")) {
+                    $d4 = $d2->archived;
+                    $d3->archived = (($d4 === null) ? null : self::deInt($d4, "NotesByAuthorRow", "archived", "opt(int)"));
+                } else {
+                    $d3->archived = null;
+                }
+                if (\property_exists($d2, "author_id")) {
+                    $d5 = $d2->author_id;
+                    $d3->author_id = (($d5 === null) ? null : self::deInt($d5, "NotesByAuthorRow", "author_id", "opt(int)"));
+                } else {
+                    $d3->author_id = null;
+                }
+                if (\property_exists($d2, "body")) {
+                    $d6 = $d2->body;
+                    $d3->body = (($d6 === null) ? null : self::deString($d6, "NotesByAuthorRow", "body", "opt(string)"));
+                } else {
+                    $d3->body = null;
+                }
+                if (\property_exists($d2, "id")) {
+                    $d7 = $d2->id;
+                    $d3->id = (($d7 === null) ? null : self::deInt($d7, "NotesByAuthorRow", "id", "opt(int)"));
+                } else {
+                    $d3->id = null;
+                }
+                $d1[] = $d3;
+            }
+            $t_n0 = $d1;
+            $produced_n0 = true;
+            return $t_n0;
+        }
+
+        public static function usersWithFilteredRelations(): mixed
+        {
+            $t_n0 = null;
+            $produced_n0 = false;
+            $t_n1 = null;
+            $produced_n1 = false;
+            $t_n2 = null;
+            $produced_n2 = false;
+            $t_n3 = null;
+            $produced_n3 = false;
+            $t_n4 = null;
+            $produced_n4 = false;
+            $t_n5 = null;
+            $produced_n5 = false;
+            $t_n6 = null;
+            $produced_n6 = false;
+            $t_n7 = null;
+            $produced_n7 = false;
+            $t_n8 = null;
+            $produced_n8 = false;
+            $t_n9 = null;
+            $produced_n9 = false;
+            // op 'n0' (executeSQL)
+            $payload_n0 = ["params" => [], "sql" => "SELECT id, name FROM conf_users ORDER BY id ASC"];
+            try {
+                $w_n0 = \LiteDbModel\Runtime\Leaves::executeSQL($payload_n0);
+            } catch (\Exception $err_n0) {
+                throw self::opFailed("n0", "fail", $err_n0);
+            }
+            if ((!(\is_array($w_n0) && \array_is_list($w_n0)))) {
+                throw self::mismatch("n0", "n0", "arr(value)", $w_n0);
+            }
+            $d1 = [];
+            foreach ($w_n0 as $d2) {
+                $d1[] = $d2;
+            }
+            $t_n0 = $d1;
+            $produced_n0 = true;
+            // op 'n1' (pluck, parent:n0)
+            if ($produced_n0) {
+                $payload_n1 = ["col" => ["id"], "rows" => $t_n0];
+                try {
+                    $w_n1 = \LiteDbModel\Runtime\Leaves::pluckKeys($payload_n1);
+                } catch (\Exception $err_n1) {
+                    throw self::opFailed("n1", "fail", $err_n1);
+                }
+                if ((!(\is_array($w_n1) && \array_is_list($w_n1)))) {
+                    throw self::mismatch("n1", "n1", "arr(value)", $w_n1);
+                }
+                $d3 = [];
+                foreach ($w_n1 as $d4) {
+                    $d3[] = $d4;
+                }
+                $t_n1 = $d3;
+                $produced_n1 = true;
+            }
+            // op 'n2' (executeSQL, parent:n1)
+            if ($produced_n1) {
+                $payload_n2 = ["params" => [$t_n1, "live"], "sql" => "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT v FROM JSON_TABLE(?, '\$[*]' COLUMNS(v DECIMAL(65,30) PATH '\$')) jt) AND status = ? ORDER BY id ASC"];
+                try {
+                    $w_n2 = \LiteDbModel\Runtime\Leaves::executeSQL($payload_n2);
+                } catch (\Exception $err_n2) {
+                    throw self::opFailed("n2", "fail", $err_n2);
+                }
+                if ((!(\is_array($w_n2) && \array_is_list($w_n2)))) {
+                    throw self::mismatch("n2", "n2", "arr(value)", $w_n2);
+                }
+                $d5 = [];
+                foreach ($w_n2 as $d6) {
+                    $d5[] = $d6;
+                }
+                $t_n2 = $d5;
+                $produced_n2 = true;
+            }
+            // op 'n3' (group, parent:n0)
+            if ($produced_n0) {
+                $payload_n3 = ["children" => $t_n2, "fk" => ["author_id"], "into" => "livePosts", "parents" => $t_n0, "pk" => ["id"], "single" => false];
+                try {
+                    $w_n3 = \LiteDbModel\Runtime\Leaves::groupChildren($payload_n3);
+                } catch (\Exception $err_n3) {
+                    throw self::opFailed("n3", "fail", $err_n3);
+                }
+                if ((!(\is_array($w_n3) && \array_is_list($w_n3)))) {
+                    throw self::mismatch("n3", "n3", "arr(value)", $w_n3);
+                }
+                $d7 = [];
+                foreach ($w_n3 as $d8) {
+                    $d7[] = $d8;
+                }
+                $t_n3 = $d7;
+                $produced_n3 = true;
+            }
+            // op 'n4' (pluck, parent:n3)
+            if ($produced_n3) {
+                $payload_n4 = ["col" => ["id"], "rows" => $t_n3];
+                try {
+                    $w_n4 = \LiteDbModel\Runtime\Leaves::pluckKeys($payload_n4);
+                } catch (\Exception $err_n4) {
+                    throw self::opFailed("n4", "fail", $err_n4);
+                }
+                if ((!(\is_array($w_n4) && \array_is_list($w_n4)))) {
+                    throw self::mismatch("n4", "n4", "arr(value)", $w_n4);
+                }
+                $d9 = [];
+                foreach ($w_n4 as $d10) {
+                    $d9[] = $d10;
+                }
+                $t_n4 = $d9;
+                $produced_n4 = true;
+            }
+            // op 'n5' (executeSQL, parent:n4)
+            if ($produced_n4) {
+                $payload_n5 = ["params" => [$t_n4, 0], "sql" => "SELECT id, author_id, body, archived FROM conf_notes WHERE author_id IN (SELECT v FROM JSON_TABLE(?, '\$[*]' COLUMNS(v DECIMAL(65,30) PATH '\$')) jt) AND (archived = ?) ORDER BY id ASC"];
+                try {
+                    $w_n5 = \LiteDbModel\Runtime\Leaves::executeSQL($payload_n5);
+                } catch (\Exception $err_n5) {
+                    throw self::opFailed("n5", "fail", $err_n5);
+                }
+                if ((!(\is_array($w_n5) && \array_is_list($w_n5)))) {
+                    throw self::mismatch("n5", "n5", "arr(value)", $w_n5);
+                }
+                $d11 = [];
+                foreach ($w_n5 as $d12) {
+                    $d11[] = $d12;
+                }
+                $t_n5 = $d11;
+                $produced_n5 = true;
+            }
+            // op 'n6' (group, parent:n3)
+            if ($produced_n3) {
+                $payload_n6 = ["children" => $t_n5, "fk" => ["author_id"], "into" => "notes", "parents" => $t_n3, "pk" => ["id"], "single" => false];
+                try {
+                    $w_n6 = \LiteDbModel\Runtime\Leaves::groupChildren($payload_n6);
+                } catch (\Exception $err_n6) {
+                    throw self::opFailed("n6", "fail", $err_n6);
+                }
+                if ((!(\is_array($w_n6) && \array_is_list($w_n6)))) {
+                    throw self::mismatch("n6", "n6", "arr(value)", $w_n6);
+                }
+                $d13 = [];
+                foreach ($w_n6 as $d14) {
+                    $d13[] = $d14;
+                }
+                $t_n6 = $d13;
+                $produced_n6 = true;
+            }
+            // op 'n7' (pluck, parent:n6)
+            if ($produced_n6) {
+                $payload_n7 = ["col" => ["id"], "rows" => $t_n6];
+                try {
+                    $w_n7 = \LiteDbModel\Runtime\Leaves::pluckKeys($payload_n7);
+                } catch (\Exception $err_n7) {
+                    throw self::opFailed("n7", "fail", $err_n7);
+                }
+                if ((!(\is_array($w_n7) && \array_is_list($w_n7)))) {
+                    throw self::mismatch("n7", "n7", "arr(value)", $w_n7);
+                }
+                $d15 = [];
+                foreach ($w_n7 as $d16) {
+                    $d15[] = $d16;
+                }
+                $t_n7 = $d15;
+                $produced_n7 = true;
+            }
+            // op 'n8' (executeSQL, parent:n7)
+            if ($produced_n7) {
+                $payload_n8 = ["params" => [$t_n7, 0], "sql" => "WITH ranked AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY author_id ORDER BY id DESC) AS _rn FROM conf_notes WHERE author_id IN (SELECT v FROM JSON_TABLE(?, '\$[*]' COLUMNS(v DECIMAL(65,30) PATH '\$')) jt) AND (archived = ?)) SELECT * FROM ranked WHERE _rn <= 1"];
+                try {
+                    $w_n8 = \LiteDbModel\Runtime\Leaves::executeSQL($payload_n8);
+                } catch (\Exception $err_n8) {
+                    throw self::opFailed("n8", "fail", $err_n8);
+                }
+                if ((!(\is_array($w_n8) && \array_is_list($w_n8)))) {
+                    throw self::mismatch("n8", "n8", "arr(value)", $w_n8);
+                }
+                $d17 = [];
+                foreach ($w_n8 as $d18) {
+                    $d17[] = $d18;
+                }
+                $t_n8 = $d17;
+                $produced_n8 = true;
+            }
+            // op 'n9' (group, parent:n6)
+            if ($produced_n6) {
+                $payload_n9 = ["children" => $t_n8, "fk" => ["author_id"], "into" => "latestNote", "parents" => $t_n6, "pk" => ["id"], "single" => false];
+                try {
+                    $w_n9 = \LiteDbModel\Runtime\Leaves::groupChildren($payload_n9);
+                } catch (\Exception $err_n9) {
+                    throw self::opFailed("n9", "fail", $err_n9);
+                }
+                if ((!(\is_array($w_n9) && \array_is_list($w_n9)))) {
+                    throw self::mismatch("n9", "n9", "arr(obj{id:opt(int),latestNote:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}),livePosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}),name:opt(string),notes:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})})", $w_n9);
+                }
+                $d19 = [];
+                foreach ($w_n9 as $d20) {
+                    if ((!($d20 instanceof \stdClass))) {
+                        throw self::mismatch("n9", "n9", "obj{id:opt(int),latestNote:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}),livePosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}),name:opt(string),notes:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})}", $d20);
+                    }
+                    $d21 = new \stdClass();
+                    if (\property_exists($d20, "id")) {
+                        $d22 = $d20->id;
+                        $d21->id = (($d22 === null) ? null : self::deInt($d22, "UsersWithFilteredRelationsRow", "id", "opt(int)"));
+                    } else {
+                        $d21->id = null;
+                    }
+                    if (\property_exists($d20, "latestNote")) {
+                        $d23 = $d20->latestNote;
+                        if ((!(\is_array($d23) && \array_is_list($d23)))) {
+                            throw self::mismatch("UsersWithFilteredRelationsRow", "latestNote", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})", $d23);
+                        }
+                        $d24 = [];
+                        foreach ($d23 as $d25) {
+                            if ((!($d25 instanceof \stdClass))) {
+                                throw self::mismatch("UsersWithFilteredRelationsRow", "latestNote", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}", $d25);
+                            }
+                            $d26 = new \stdClass();
+                            if (\property_exists($d25, "archived")) {
+                                $d27 = $d25->archived;
+                                $d26->archived = (($d27 === null) ? null : self::deInt($d27, "UsersWithFilteredRelationsRow_latestNote", "archived", "opt(int)"));
+                            } else {
+                                $d26->archived = null;
+                            }
+                            if (\property_exists($d25, "author_id")) {
+                                $d28 = $d25->author_id;
+                                $d26->author_id = (($d28 === null) ? null : self::deInt($d28, "UsersWithFilteredRelationsRow_latestNote", "author_id", "opt(int)"));
+                            } else {
+                                $d26->author_id = null;
+                            }
+                            if (\property_exists($d25, "body")) {
+                                $d29 = $d25->body;
+                                $d26->body = (($d29 === null) ? null : self::deString($d29, "UsersWithFilteredRelationsRow_latestNote", "body", "opt(string)"));
+                            } else {
+                                $d26->body = null;
+                            }
+                            if (\property_exists($d25, "id")) {
+                                $d30 = $d25->id;
+                                $d26->id = (($d30 === null) ? null : self::deInt($d30, "UsersWithFilteredRelationsRow_latestNote", "id", "opt(int)"));
+                            } else {
+                                $d26->id = null;
+                            }
+                            $d24[] = $d26;
+                        }
+                        $d21->latestNote = $d24;
+                    } else {
+                        throw self::missing("UsersWithFilteredRelationsRow", "latestNote", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})");
+                    }
+                    if (\property_exists($d20, "livePosts")) {
+                        $d31 = $d20->livePosts;
+                        if ((!(\is_array($d31) && \array_is_list($d31)))) {
+                            throw self::mismatch("UsersWithFilteredRelationsRow", "livePosts", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})", $d31);
+                        }
+                        $d32 = [];
+                        foreach ($d31 as $d33) {
+                            if ((!($d33 instanceof \stdClass))) {
+                                throw self::mismatch("UsersWithFilteredRelationsRow", "livePosts", "obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}", $d33);
+                            }
+                            $d34 = new \stdClass();
+                            if (\property_exists($d33, "author_id")) {
+                                $d35 = $d33->author_id;
+                                $d34->author_id = (($d35 === null) ? null : self::deInt($d35, "UsersWithFilteredRelationsRow_livePosts", "author_id", "opt(int)"));
+                            } else {
+                                $d34->author_id = null;
+                            }
+                            if (\property_exists($d33, "created_at")) {
+                                $d36 = $d33->created_at;
+                                $d34->created_at = (($d36 === null) ? null : self::deString($d36, "UsersWithFilteredRelationsRow_livePosts", "created_at", "opt(string)"));
+                            } else {
+                                $d34->created_at = null;
+                            }
+                            if (\property_exists($d33, "id")) {
+                                $d37 = $d33->id;
+                                $d34->id = (($d37 === null) ? null : self::deInt($d37, "UsersWithFilteredRelationsRow_livePosts", "id", "opt(int)"));
+                            } else {
+                                $d34->id = null;
+                            }
+                            if (\property_exists($d33, "status")) {
+                                $d38 = $d33->status;
+                                $d34->status = (($d38 === null) ? null : self::deString($d38, "UsersWithFilteredRelationsRow_livePosts", "status", "opt(string)"));
+                            } else {
+                                $d34->status = null;
+                            }
+                            if (\property_exists($d33, "title")) {
+                                $d39 = $d33->title;
+                                $d34->title = (($d39 === null) ? null : self::deString($d39, "UsersWithFilteredRelationsRow_livePosts", "title", "opt(string)"));
+                            } else {
+                                $d34->title = null;
+                            }
+                            $d32[] = $d34;
+                        }
+                        $d21->livePosts = $d32;
+                    } else {
+                        throw self::missing("UsersWithFilteredRelationsRow", "livePosts", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})");
+                    }
+                    if (\property_exists($d20, "name")) {
+                        $d40 = $d20->name;
+                        $d21->name = (($d40 === null) ? null : self::deString($d40, "UsersWithFilteredRelationsRow", "name", "opt(string)"));
+                    } else {
+                        $d21->name = null;
+                    }
+                    if (\property_exists($d20, "notes")) {
+                        $d41 = $d20->notes;
+                        if ((!(\is_array($d41) && \array_is_list($d41)))) {
+                            throw self::mismatch("UsersWithFilteredRelationsRow", "notes", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})", $d41);
+                        }
+                        $d42 = [];
+                        foreach ($d41 as $d43) {
+                            if ((!($d43 instanceof \stdClass))) {
+                                throw self::mismatch("UsersWithFilteredRelationsRow", "notes", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}", $d43);
+                            }
+                            $d44 = new \stdClass();
+                            if (\property_exists($d43, "archived")) {
+                                $d45 = $d43->archived;
+                                $d44->archived = (($d45 === null) ? null : self::deInt($d45, "UsersWithFilteredRelationsRow_notes", "archived", "opt(int)"));
+                            } else {
+                                $d44->archived = null;
+                            }
+                            if (\property_exists($d43, "author_id")) {
+                                $d46 = $d43->author_id;
+                                $d44->author_id = (($d46 === null) ? null : self::deInt($d46, "UsersWithFilteredRelationsRow_notes", "author_id", "opt(int)"));
+                            } else {
+                                $d44->author_id = null;
+                            }
+                            if (\property_exists($d43, "body")) {
+                                $d47 = $d43->body;
+                                $d44->body = (($d47 === null) ? null : self::deString($d47, "UsersWithFilteredRelationsRow_notes", "body", "opt(string)"));
+                            } else {
+                                $d44->body = null;
+                            }
+                            if (\property_exists($d43, "id")) {
+                                $d48 = $d43->id;
+                                $d44->id = (($d48 === null) ? null : self::deInt($d48, "UsersWithFilteredRelationsRow_notes", "id", "opt(int)"));
+                            } else {
+                                $d44->id = null;
+                            }
+                            $d42[] = $d44;
+                        }
+                        $d21->notes = $d42;
+                    } else {
+                        throw self::missing("UsersWithFilteredRelationsRow", "notes", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})");
+                    }
+                    $d19[] = $d21;
+                }
+                $t_n9 = $d19;
+                $produced_n9 = true;
+            }
+            return $t_n9;
         }
 
         public static function usersWithCappedPosts(): mixed

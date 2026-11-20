@@ -30,7 +30,7 @@
  * so the whole shape is byte-faithful to the original relation builder.
  */
 
-import { DBConditions, type ConditionObject } from '../../DBConditions';
+import { DBConditions, mergeConditions, type ConditionObject } from '../../DBConditions';
 import { tupleInPredicate } from './json-array';
 import { pgTypeSpecimen } from './tx';
 import type { MakeSQL } from './makesql';
@@ -208,7 +208,7 @@ export function compileCompositeKeyStaticUnlimited(
   }
   // MySQL/SQLite: composite membership via ONE JSON array-of-tuples param, read by ORDINAL path.
   const jsonSubquery = compositeJsonMembership(opts.dialect, tableName, targetKeys, opts.keyTypes);
-  const conditions: ConditionObject = { ...opts.conditions, __raw__: [jsonSubquery, PLACEHOLDER_TUPLES] };
+  const conditions: ConditionObject = mergeConditions({ __raw__: [jsonSubquery, PLACEHOLDER_TUPLES] }, opts.conditions);
   return compileSelect({
     dialect: opts.dialect,
     tableName,
@@ -256,10 +256,10 @@ export function compileSingleKeyUnlimited(
   if (opts.dialect === 'postgres') {
     const sqlCast = opts.sqlCastMap?.get(opts.targetKey);
     const pgType = pgArrayCastType(opts.values, sqlCast, opts.deferPgArrayCast);
-    const conditions: ConditionObject = {
-      __raw__: [`${opts.tableName}.${opts.targetKey} = ANY(?::${pgType})`, [opts.values]],
-      ...opts.conditions,
-    };
+    const conditions: ConditionObject = mergeConditions(
+      { __raw__: [`${opts.tableName}.${opts.targetKey} = ANY(?::${pgType})`, [opts.values]] },
+      opts.conditions,
+    );
     return compileSelect({
       dialect: opts.dialect,
       tableName: opts.tableName,
@@ -268,8 +268,8 @@ export function compileSingleKeyUnlimited(
       order: opts.order,
     });
   }
-  // MySQL/SQLite: `{ ...conditions, [targetKey]: values }` → the single-JSON-param IN-list.
-  const conditions: ConditionObject = { ...opts.conditions, [opts.targetKey]: opts.values };
+  // MySQL/SQLite: `[targetKey]: values` → the single-JSON-param IN-list, AND the conditions (the key set binds first).
+  const conditions: ConditionObject = mergeConditions({ [opts.targetKey]: opts.values }, opts.conditions);
   return compileSelect({
     dialect: opts.dialect,
     tableName: opts.tableName,
@@ -295,10 +295,10 @@ export function compileSingleKeyLimited(
   if (opts.dialect === 'postgres') {
     const sqlCast = opts.sqlCastMap?.get(opts.targetKey);
     const pgType = pgArrayCastType(opts.values, sqlCast, opts.deferPgArrayCast);
-    const lateralConditions: ConditionObject = {
-      __raw__: `${opts.tableName}.${opts.targetKey} = _keys.key`,
-      ...opts.conditions,
-    };
+    const lateralConditions: ConditionObject = mergeConditions(
+      { __raw__: `${opts.tableName}.${opts.targetKey} = _keys.key` },
+      opts.conditions,
+    );
     const inner = compileSelect({
       dialect: opts.dialect,
       tableName: opts.tableName,
@@ -314,7 +314,7 @@ export function compileSingleKeyLimited(
 
   // MySQL/SQLite: ROW_NUMBER() CTE.
   const orderBy = opts.order || opts.targetKey;
-  const cteConditions: ConditionObject = { [opts.targetKey]: opts.values, ...opts.conditions };
+  const cteConditions: ConditionObject = mergeConditions({ [opts.targetKey]: opts.values }, opts.conditions);
   const cte = compileSelect({
     dialect: opts.dialect,
     tableName: opts.tableName,
@@ -377,7 +377,7 @@ export function compileCompositeKeyUnlimited(
   const inClause = `(${targetKeys.join(', ')}) IN (${tuplePlaceholders})`;
   // The original builds base conditions FIRST then the composite IN last; DBConditions
   // preserves object key insertion order, so replicate that order.
-  const conditions: ConditionObject = { ...opts.conditions, __raw__: [inClause, tuples.flat()] };
+  const conditions: ConditionObject = mergeConditions(opts.conditions, { __raw__: [inClause, tuples.flat()] });
   return compileSelect({
     dialect: opts.dialect,
     tableName,
@@ -410,7 +410,7 @@ export function compileCompositeKeyLimited(
     const keyConditions = targetKeys
       .map((key, i) => `${tableName}.${key} = _keys.key${i}`)
       .join(' AND ');
-    const lateralConditions: ConditionObject = { __raw__: keyConditions, ...opts.conditions };
+    const lateralConditions: ConditionObject = mergeConditions({ __raw__: keyConditions }, opts.conditions);
     const inner = compileSelect({
       dialect: opts.dialect,
       tableName,
@@ -432,7 +432,7 @@ export function compileCompositeKeyLimited(
     .join(', ');
   const inClause = `(${targetKeys.join(', ')}) IN (${tuplePlaceholders})`;
   const cteParams = tuples.flat();
-  const cteConditions: ConditionObject = { __raw__: [inClause, cteParams], ...opts.conditions };
+  const cteConditions: ConditionObject = mergeConditions({ __raw__: [inClause, cteParams] }, opts.conditions);
   const cte = compileSelect({
     dialect: opts.dialect,
     tableName,
@@ -483,7 +483,7 @@ export function compileCompositeKeyStaticLimited(
     const keyConditions = targetKeys
       .map((key, i) => `${tableName}.${key} = ${PG_KEYS_ALIAS}.key${i}`)
       .join(' AND ');
-    const lateralConditions: ConditionObject = { __raw__: keyConditions, ...opts.conditions };
+    const lateralConditions: ConditionObject = mergeConditions({ __raw__: keyConditions }, opts.conditions);
     const inner = compileSelect({
       dialect: opts.dialect,
       tableName,
@@ -502,7 +502,7 @@ export function compileCompositeKeyStaticLimited(
   const orderBy = opts.order || targetKeys.join(', ');
   const partitionBy = targetKeys.join(', ');
   const jsonSubquery = compositeJsonMembership(opts.dialect, tableName, targetKeys, opts.keyTypes);
-  const cteConditions: ConditionObject = { __raw__: [jsonSubquery, PLACEHOLDER_TUPLES], ...opts.conditions };
+  const cteConditions: ConditionObject = mergeConditions({ __raw__: [jsonSubquery, PLACEHOLDER_TUPLES] }, opts.conditions);
   const cte = compileSelect({
     dialect: opts.dialect,
     tableName,

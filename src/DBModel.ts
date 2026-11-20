@@ -5,7 +5,7 @@
 import { AsyncLocalStorage } from 'async_hooks';
 import { DBBoolValue, DBNullValue, DBNotNullValue, DBImmediateValue, DBToken, DBSubquery, DBExists, type SubqueryCondition, type SqlCastFormatter } from './DBValues';
 import { getSqlCastFormatter } from './drivers';
-import { normalizeConditions, type ConditionObject } from './DBConditions';
+import { normalizeConditions, withDefaultFilter, defaultFilterFragment, type ConditionObject } from './DBConditions';
 import { initDBHandler, getDBHandler, createHandlerWithConnection, DBHandler, type DBConfig, type DBConnection } from './DBHandler';
 import type { SelectOptions, InsertOptions, UpdateOptions, DeleteOptions, UpdateManyOptions, TransactionOptions, LimitConfig, DBConfigOptions, PkeyResult, InternalInsertOptions, InternalUpdateOptions, InternalDeleteOptions, ReturningKey } from './types';
 import { LimitExceededError, WriteOutsideTransactionError, WriteInReadOnlyContextError } from './types';
@@ -783,15 +783,9 @@ export abstract class DBModel {
       params.push(...options.joinParams);
     }
 
-    const normalizedCond = normalizeConditions(conditions);
-    if (this.FIND_FILTER) {
-      const filterCondition = condsToRecord(this.FIND_FILTER, this._getConditionTypeCast()) as ConditionObject;
-      normalizedCond.add(filterCondition);
-    }
-
     // Get formatter for driver-specific SQL type casting (safe for tests)
     const formatter = this._getSqlCastFormatter();
-    const whereClause = normalizedCond.compile(params, formatter);
+    const whereClause = this._whereClause(conditions, params, formatter);
 
     // Build CTE prefix
     let sql = '';
@@ -958,11 +952,42 @@ export abstract class DBModel {
     return this.query(sql, params);
   }
 
-  /** Merge FIND_FILTER (the model's default filter) into a condition object (v1 `_buildSelectSQL` parity). */
-  protected static _mergeFindFilter(conditions: ConditionObject): ConditionObject {
-    if (!this.FIND_FILTER) return conditions;
-    const filter = condsToRecord(this.FIND_FILTER, this._getConditionTypeCast()) as ConditionObject;
-    return { ...conditions, ...filter };
+  /**
+   * The model's default filter (`@model({ filter })` → FIND_FILTER) as a condition object, or `undefined`
+   * when it declares none. The one conversion every read that applies the filter consumes: the select and
+   * count builders, and the per-parent window of a `limit`ed relation. @internal
+   */
+  static _findFilterConditions(qualifier?: string): ConditionObject | undefined {
+    if (!this.FIND_FILTER) return undefined;
+    return condsToRecord(this.FIND_FILTER, this._getConditionTypeCast(), qualifier) as ConditionObject;
+  }
+
+  /**
+   * The conditions a statement on this model's rows runs with: its OWN conditions AND the model's
+   * default filter as one group after them (`withDefaultFilter`). Every read and write that addresses
+   * existing rows — find / findOne / count / findById / update / delete / updateMany / relation loads —
+   * applies the filter through this and {@link _scopeFragment}. `qualifier` names the table's alias. @internal
+   */
+  static _scopedConditions(conditions: ConditionObject | undefined, qualifier?: string): ConditionObject {
+    return withDefaultFilter(conditions, this._findFilterConditions(qualifier));
+  }
+
+  /**
+   * The WHERE text (without `WHERE`) of a statement built from a condition object: the
+   * {@link _scopedConditions} compiled once, its values appended to `params`. The ONE WHERE compile of the
+   * select, count, update and delete builders. @internal
+   */
+  protected static _whereClause(conditions: ConditionObject, params: unknown[], formatter?: SqlCastFormatter): string {
+    return normalizeConditions(this._scopedConditions(conditions)).compile(params, formatter);
+  }
+
+  /**
+   * The default filter as a WHERE fragment for a statement whose WHERE a dialect builder assembles as
+   * text (findById, updateMany): `(<filter>)` and its values, ANDed AFTER the builder's own predicate.
+   * `undefined` when the model declares none. @internal
+   */
+  protected static _scopeFragment(qualifier?: string): { sql: string; params: unknown[] } | undefined {
+    return defaultFilterFragment(this._findFilterConditions(qualifier), this._getSqlCastFormatter());
   }
 
   /** Build model instances from raw rows, wiring the deferred relation context (v1 `query` parity). @internal */
@@ -1066,15 +1091,9 @@ export abstract class DBModel {
       params.push(...queryParams);
     }
 
-    const normalizedCond = normalizeConditions(conditions);
-    if (this.FIND_FILTER) {
-      const filterCondition = condsToRecord(this.FIND_FILTER, this._getConditionTypeCast()) as ConditionObject;
-      normalizedCond.add(filterCondition);
-    }
-
     // Get formatter for driver-specific SQL type casting (safe for tests)
     const formatter = this._getSqlCastFormatter();
-    const whereClause = normalizedCond.compile(params, formatter);
+    const whereClause = this._whereClause(conditions, params, formatter);
 
     // Build CTE prefix if query-based
     let sql = '';
@@ -1339,12 +1358,11 @@ export abstract class DBModel {
       return [];
     }
 
-    const normalizedCond = normalizeConditions(conditions);
-    const whereClause = normalizedCond.compile(params, formatter);
-
-    if (!whereClause) {
+    // The statement must carry conditions of its OWN: the default filter alone never selects the rows.
+    if (normalizeConditions(conditions).compile([], formatter) === '') {
       throw new Error('UPDATE requires conditions');
     }
+    const whereClause = this._whereClause(conditions, params, formatter);
 
     let sql = `UPDATE ${tableName} SET ${setClauses.join(', ')} WHERE ${whereClause}`;
 
@@ -1382,14 +1400,13 @@ export abstract class DBModel {
     const tableName = options.tableName || this.getUpdateTableName();
     const params: unknown[] = [];
 
-    const normalizedCond = normalizeConditions(conditions);
     // Get formatter for driver-specific SQL type casting (safe for tests)
     const formatter = this._getSqlCastFormatter();
-    const whereClause = normalizedCond.compile(params, formatter);
-
-    if (!whereClause) {
+    // The statement must carry conditions of its OWN: the default filter alone never selects the rows.
+    if (normalizeConditions(conditions).compile([], formatter) === '') {
       throw new Error('DELETE requires conditions');
     }
+    const whereClause = this._whereClause(conditions, params, formatter);
 
     let sql = `DELETE FROM ${tableName} WHERE ${whereClause}`;
 
@@ -2248,7 +2265,8 @@ export abstract class DBModel {
     records: T[],
     propertyKey: string
   ): Record<string, T> {
-    const result: Record<string, T> = {};
+    // No prototype: a stored value such as `constructor` / `__proto__` is an ordinary key, not an inherited member.
+    const result: Record<string, T> = Object.create(null);
     for (const record of records) {
       const key = String((record as Record<string, unknown>)[propertyKey]);
       result[key] = record;
@@ -2263,7 +2281,8 @@ export abstract class DBModel {
     records: T[],
     propertyKey: string
   ): Record<string, T[]> {
-    const result: Record<string, T[]> = {};
+    // No prototype: a stored value such as `constructor` / `__proto__` is an ordinary key, not an inherited member.
+    const result: Record<string, T[]> = Object.create(null);
     for (const record of records) {
       const key = String((record as Record<string, unknown>)[propertyKey]);
       if (!result[key]) {
@@ -2476,6 +2495,7 @@ export abstract class DBModel {
         pkeyValues: values,
         selectColumn,
         sqlCastMap,
+        scope: (qualifier) => this._scopeFragment(qualifier),
       });
       
       let sql = buildResult.sql;
@@ -2877,7 +2897,22 @@ export abstract class DBModel {
         sqlCastMap,
         skipMap,
         returning,
+        scope: (qualifier) => this._scopeFragment(qualifier),
       });
+
+      // Driver doesn't support RETURNING - SELECT the PKs of the rows the UPDATE will write, BEFORE it
+      // runs: the same keys AND the same default filter, which the UPDATE may itself change.
+      const preImage =
+        opts.returning && !sqlBuilder.supportsReturning && sqlBuilder.buildSelectPkeys
+          ? sqlBuilder.buildSelectPkeys({
+              tableName,
+              pkeyColumns: pkeyColumnNames,
+              keyColumns: keyColumnNames,
+              keyValues: rowRecords.map(r => keyColumnNames.map(col => r[col])),
+              scope: (qualifier) => this._scopeFragment(qualifier),
+            })
+          : undefined;
+      const selectResult = preImage !== undefined ? await this.execute(preImage.sql, preImage.params) : undefined;
 
       // Execute the update
       const result = await this.execute(buildResult.sql, buildResult.params);
@@ -2887,16 +2922,7 @@ export abstract class DBModel {
       }
 
       // Build PkeyResult
-      if (!sqlBuilder.supportsReturning && sqlBuilder.buildSelectPkeys) {
-        // Driver doesn't support RETURNING - use SELECT to get affected PKs
-        const keyValues = rowRecords.map(r => keyColumnNames.map(col => r[col]));
-        const selectBuild = sqlBuilder.buildSelectPkeys({
-          tableName,
-          pkeyColumns: pkeyColumnNames,
-          keyColumns: keyColumnNames,
-          keyValues,
-        });
-        const selectResult = await this.execute(selectBuild.sql, selectBuild.params);
+      if (selectResult !== undefined) {
         return this._buildPkeyResult(selectResult.rows as Record<string, unknown>[], pkeyColumns);
       } else {
         // PostgreSQL/SQLite: Use RETURNING result
