@@ -68,9 +68,10 @@
 
 import type { PortableType } from 'behavior-contracts/runtime';
 import { DBExists, DBSubquery, DBParentRef, type ColumnRef, type SubqueryCondition } from '../../DBValues';
-import { putCondition, withDefaultFilter, type ConditionObject, type ConditionValue } from '../../DBConditions';
+import { putCondition, withDefaultFilter, defaultFilterFragment, type ConditionObject, type ConditionValue } from '../../DBConditions';
+import type { ScopeFragment } from '../../drivers/types';
 import { compileSelect, type BoundCount, type SelectBundle, type SelectDesc } from '../makesql/compile-select';
-import { compileWhere } from '../makesql/compile';
+import { compileWhere, formatterFor } from '../makesql/compile';
 import { inListPredicate, tupleInPredicate } from '../makesql/json-array';
 import { compileWriteNode } from '../makesql/tx';
 import { deriveReadRow } from '../makesql/outtype';
@@ -533,9 +534,11 @@ class EmitContext {
       component = 'Update';
       this.valuePorts(model, endpoint.set, 'set', ports, params);
       ports.where = this.wherePort(model, endpoint.where, params, `endpoint '${name}'`);
+      ports.scope = this.scopeOf(model);
     } else {
       component = 'Delete';
       ports.where = this.wherePort(model, endpoint.where, params, `endpoint '${name}'`);
+      ports.scope = this.scopeOf(model);
     }
 
     const op = compileWriteNode({ component, ports } as Parameters<typeof compileWriteNode>[0], this.spec.dialect, this.resolver(model));
@@ -550,6 +553,16 @@ class EmitContext {
         `return ${out};`,
       ],
     };
+  }
+
+  /**
+   * The model's default filter as the write compiler's `scope` port: the SAME group a read ANDs
+   * (`withDefaultFilter`), compiled for this dialect and for the table alias the statement gives it.
+   * Every write that addresses existing rows (update / delete / updateMany / deleteMany) carries it.
+   */
+  private scopeOf(model: ModelClassLike): ScopeFragment {
+    const dialect = this.spec.dialect;
+    return (qualifier) => defaultFilterFragment(findFilterOf(model, dialect, qualifier), formatterFor(dialect));
   }
 
   /** Declare the `<family>.<column>` ports for a VALUES / SET list, binding each to a method parameter. */
@@ -626,6 +639,7 @@ class EmitContext {
     } else {
       for (const c of endpoint.keyColumns) ports[`key.${c}`] = columnParam(c);
       for (const c of endpoint.columns) ports[`set.${c}`] = columnParam(c);
+      ports.scope = this.scopeOf(model);
     }
     if (!pg) params.push({ name: endpoint.param, type: `${this.recordType(name, model, columns)}[]` });
 
@@ -658,6 +672,7 @@ class EmitContext {
     const ports: Record<string, unknown> = {
       table: tableNameOf(model),
       where: { arr: [{ in: [{ ref: [endpoint.keyColumn] }, new ParamRef(endpoint.param)] }] },
+      scope: this.scopeOf(model),
     };
     this.returningPorts(model, endpoint.returning, ports);
     const op = compileWriteNode({ component: 'Delete', ports } as Parameters<typeof compileWriteNode>[0], this.spec.dialect, this.resolver(model));

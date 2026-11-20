@@ -3713,6 +3713,862 @@
       ]
     },
     {
+      "name": "renameNote: UPDATE leaves a row the default filter excludes [postgres]",
+      "dialect": "postgres",
+      "entry": "renameNote",
+      "input": {
+        "body": "renamed",
+        "id": 2
+      },
+      "expectedStatements": [
+        {
+          "sql": "UPDATE conf_notes SET body = $1 WHERE id = $2 AND (archived = $3)",
+          "params": [
+            "renamed",
+            2,
+            {
+              "$bigint": "0"
+            }
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "changes": {
+            "$bigint": "0"
+          },
+          "lastInsertRowid": {
+            "$bigint": "0"
+          }
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, body, archived FROM conf_notes ORDER BY id",
+          "rows": [
+            {
+              "id": {
+                "$bigint": "1"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
+              "body": "n1",
+              "archived": {
+                "$bigint": "0"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "2"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
+              "body": "n2 archived",
+              "archived": {
+                "$bigint": "1"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "3"
+              },
+              "author_id": {
+                "$bigint": "2"
+              },
+              "body": "n3",
+              "archived": {
+                "$bigint": "0"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "4"
+              },
+              "author_id": {
+                "$bigint": "3"
+              },
+              "body": "n4 archived",
+              "archived": {
+                "$bigint": "1"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "renameNote: UPDATE leaves a row the default filter excludes [mysql]",
+      "dialect": "mysql",
+      "entry": "renameNote",
+      "input": {
+        "body": "renamed",
+        "id": 2
+      },
+      "expectedStatements": [
+        {
+          "sql": "UPDATE conf_notes SET body = ? WHERE id = ? AND (archived = ?)",
+          "params": [
+            "renamed",
+            2,
+            {
+              "$bigint": "0"
+            }
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "changes": {
+            "$bigint": "0"
+          },
+          "lastInsertRowid": {
+            "$bigint": "0"
+          }
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, body, archived FROM conf_notes ORDER BY id",
+          "rows": [
+            {
+              "id": {
+                "$bigint": "1"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
+              "body": "n1",
+              "archived": {
+                "$bigint": "0"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "2"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
+              "body": "n2 archived",
+              "archived": {
+                "$bigint": "1"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "3"
+              },
+              "author_id": {
+                "$bigint": "2"
+              },
+              "body": "n3",
+              "archived": {
+                "$bigint": "0"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "4"
+              },
+              "author_id": {
+                "$bigint": "3"
+              },
+              "body": "n4 archived",
+              "archived": {
+                "$bigint": "1"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "renameNote: UPDATE writes a row the default filter admits [postgres]",
+      "dialect": "postgres",
+      "entry": "renameNote",
+      "input": {
+        "body": "renamed",
+        "id": 1
+      },
+      "expectedStatements": [
+        {
+          "sql": "UPDATE conf_notes SET body = $1 WHERE id = $2 AND (archived = $3)",
+          "params": [
+            "renamed",
+            1,
+            {
+              "$bigint": "0"
+            }
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "changes": {
+            "$bigint": "1"
+          },
+          "lastInsertRowid": {
+            "$bigint": "0"
+          }
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, body, archived FROM conf_notes ORDER BY id",
+          "rows": [
+            {
+              "id": {
+                "$bigint": "1"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
+              "body": "renamed",
+              "archived": {
+                "$bigint": "0"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "2"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
+              "body": "n2 archived",
+              "archived": {
+                "$bigint": "1"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "3"
+              },
+              "author_id": {
+                "$bigint": "2"
+              },
+              "body": "n3",
+              "archived": {
+                "$bigint": "0"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "4"
+              },
+              "author_id": {
+                "$bigint": "3"
+              },
+              "body": "n4 archived",
+              "archived": {
+                "$bigint": "1"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "renameNote: UPDATE writes a row the default filter admits [mysql]",
+      "dialect": "mysql",
+      "entry": "renameNote",
+      "input": {
+        "body": "renamed",
+        "id": 1
+      },
+      "expectedStatements": [
+        {
+          "sql": "UPDATE conf_notes SET body = ? WHERE id = ? AND (archived = ?)",
+          "params": [
+            "renamed",
+            1,
+            {
+              "$bigint": "0"
+            }
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "changes": {
+            "$bigint": "1"
+          },
+          "lastInsertRowid": {
+            "$bigint": "0"
+          }
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, body, archived FROM conf_notes ORDER BY id",
+          "rows": [
+            {
+              "id": {
+                "$bigint": "1"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
+              "body": "renamed",
+              "archived": {
+                "$bigint": "0"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "2"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
+              "body": "n2 archived",
+              "archived": {
+                "$bigint": "1"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "3"
+              },
+              "author_id": {
+                "$bigint": "2"
+              },
+              "body": "n3",
+              "archived": {
+                "$bigint": "0"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "4"
+              },
+              "author_id": {
+                "$bigint": "3"
+              },
+              "body": "n4 archived",
+              "archived": {
+                "$bigint": "1"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "removeNote: DELETE leaves a row the default filter excludes [postgres]",
+      "dialect": "postgres",
+      "entry": "removeNote",
+      "input": {
+        "id": 2
+      },
+      "expectedStatements": [
+        {
+          "sql": "DELETE FROM conf_notes WHERE id = $1 AND (archived = $2)",
+          "params": [
+            2,
+            {
+              "$bigint": "0"
+            }
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "changes": {
+            "$bigint": "0"
+          },
+          "lastInsertRowid": {
+            "$bigint": "0"
+          }
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, body, archived FROM conf_notes ORDER BY id",
+          "rows": [
+            {
+              "id": {
+                "$bigint": "1"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
+              "body": "n1",
+              "archived": {
+                "$bigint": "0"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "2"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
+              "body": "n2 archived",
+              "archived": {
+                "$bigint": "1"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "3"
+              },
+              "author_id": {
+                "$bigint": "2"
+              },
+              "body": "n3",
+              "archived": {
+                "$bigint": "0"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "4"
+              },
+              "author_id": {
+                "$bigint": "3"
+              },
+              "body": "n4 archived",
+              "archived": {
+                "$bigint": "1"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "removeNote: DELETE leaves a row the default filter excludes [mysql]",
+      "dialect": "mysql",
+      "entry": "removeNote",
+      "input": {
+        "id": 2
+      },
+      "expectedStatements": [
+        {
+          "sql": "DELETE FROM conf_notes WHERE id = ? AND (archived = ?)",
+          "params": [
+            2,
+            {
+              "$bigint": "0"
+            }
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "changes": {
+            "$bigint": "0"
+          },
+          "lastInsertRowid": {
+            "$bigint": "0"
+          }
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, body, archived FROM conf_notes ORDER BY id",
+          "rows": [
+            {
+              "id": {
+                "$bigint": "1"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
+              "body": "n1",
+              "archived": {
+                "$bigint": "0"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "2"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
+              "body": "n2 archived",
+              "archived": {
+                "$bigint": "1"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "3"
+              },
+              "author_id": {
+                "$bigint": "2"
+              },
+              "body": "n3",
+              "archived": {
+                "$bigint": "0"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "4"
+              },
+              "author_id": {
+                "$bigint": "3"
+              },
+              "body": "n4 archived",
+              "archived": {
+                "$bigint": "1"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "removeNotes: batch DELETE removes only the rows the default filter admits [postgres]",
+      "dialect": "postgres",
+      "entry": "removeNotes",
+      "input": {
+        "ids": [
+          1,
+          2
+        ]
+      },
+      "expectedStatements": [
+        {
+          "sql": "DELETE FROM conf_notes WHERE id = ANY($1) AND (archived = $2)",
+          "params": [
+            [
+              1,
+              2
+            ],
+            {
+              "$bigint": "0"
+            }
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "changes": {
+            "$bigint": "1"
+          },
+          "lastInsertRowid": {
+            "$bigint": "0"
+          }
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, body, archived FROM conf_notes ORDER BY id",
+          "rows": [
+            {
+              "id": {
+                "$bigint": "2"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
+              "body": "n2 archived",
+              "archived": {
+                "$bigint": "1"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "3"
+              },
+              "author_id": {
+                "$bigint": "2"
+              },
+              "body": "n3",
+              "archived": {
+                "$bigint": "0"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "4"
+              },
+              "author_id": {
+                "$bigint": "3"
+              },
+              "body": "n4 archived",
+              "archived": {
+                "$bigint": "1"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "removeNotes: batch DELETE removes only the rows the default filter admits [mysql]",
+      "dialect": "mysql",
+      "entry": "removeNotes",
+      "input": {
+        "ids": [
+          1,
+          2
+        ]
+      },
+      "expectedStatements": [
+        {
+          "sql": "DELETE FROM conf_notes WHERE id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt) AND (archived = ?)",
+          "params": [
+            "[1,2]",
+            {
+              "$bigint": "0"
+            }
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "changes": {
+            "$bigint": "1"
+          },
+          "lastInsertRowid": {
+            "$bigint": "0"
+          }
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, body, archived FROM conf_notes ORDER BY id",
+          "rows": [
+            {
+              "id": {
+                "$bigint": "2"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
+              "body": "n2 archived",
+              "archived": {
+                "$bigint": "1"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "3"
+              },
+              "author_id": {
+                "$bigint": "2"
+              },
+              "body": "n3",
+              "archived": {
+                "$bigint": "0"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "4"
+              },
+              "author_id": {
+                "$bigint": "3"
+              },
+              "body": "n4 archived",
+              "archived": {
+                "$bigint": "1"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "renameNotes: batch UPDATE writes only the rows the default filter admits [postgres]",
+      "dialect": "postgres",
+      "entry": "renameNotes",
+      "input": {
+        "rows_id": [
+          1,
+          2
+        ],
+        "rows_body": [
+          "one",
+          "two"
+        ]
+      },
+      "expectedStatements": [
+        {
+          "sql": "UPDATE conf_notes AS t SET body = v.body FROM UNNEST($1::bigint[], $2::text[]) AS v(id, body) WHERE t.id = v.id AND (t.archived = $3)",
+          "params": [
+            [
+              1,
+              2
+            ],
+            [
+              "one",
+              "two"
+            ],
+            {
+              "$bigint": "0"
+            }
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "changes": {
+            "$bigint": "1"
+          },
+          "lastInsertRowid": {
+            "$bigint": "0"
+          }
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, body, archived FROM conf_notes ORDER BY id",
+          "rows": [
+            {
+              "id": {
+                "$bigint": "1"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
+              "body": "one",
+              "archived": {
+                "$bigint": "0"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "2"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
+              "body": "n2 archived",
+              "archived": {
+                "$bigint": "1"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "3"
+              },
+              "author_id": {
+                "$bigint": "2"
+              },
+              "body": "n3",
+              "archived": {
+                "$bigint": "0"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "4"
+              },
+              "author_id": {
+                "$bigint": "3"
+              },
+              "body": "n4 archived",
+              "archived": {
+                "$bigint": "1"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "renameNotes: batch UPDATE writes only the rows the default filter admits [mysql]",
+      "dialect": "mysql",
+      "entry": "renameNotes",
+      "input": {
+        "rows": [
+          {
+            "id": 1,
+            "body": "one"
+          },
+          {
+            "id": 2,
+            "body": "two"
+          }
+        ]
+      },
+      "expectedStatements": [
+        {
+          "sql": "UPDATE conf_notes AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(id DECIMAL(65,30) PATH '$.id', body JSON PATH '$.body')) AS v ON u.id = v.id SET u.body = JSON_UNQUOTE(v.body) WHERE (u.archived = ?)",
+          "params": [
+            "[{\"id\":1,\"body\":\"one\"},{\"id\":2,\"body\":\"two\"}]",
+            {
+              "$bigint": "0"
+            }
+          ]
+        }
+      ],
+      "expectedResult": [
+        {
+          "changes": {
+            "$bigint": "1"
+          },
+          "lastInsertRowid": {
+            "$bigint": "0"
+          }
+        }
+      ],
+      "expectedDbState": [
+        {
+          "query": "SELECT id, author_id, body, archived FROM conf_notes ORDER BY id",
+          "rows": [
+            {
+              "id": {
+                "$bigint": "1"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
+              "body": "one",
+              "archived": {
+                "$bigint": "0"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "2"
+              },
+              "author_id": {
+                "$bigint": "1"
+              },
+              "body": "n2 archived",
+              "archived": {
+                "$bigint": "1"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "3"
+              },
+              "author_id": {
+                "$bigint": "2"
+              },
+              "body": "n3",
+              "archived": {
+                "$bigint": "0"
+              }
+            },
+            {
+              "id": {
+                "$bigint": "4"
+              },
+              "author_id": {
+                "$bigint": "3"
+              },
+              "body": "n4 archived",
+              "archived": {
+                "$bigint": "1"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "createPostReturning: INSERT … RETURNING returns the written row (client-supplied PK) [postgres]",
       "dialect": "postgres",
       "entry": "createPostReturning",

@@ -500,6 +500,34 @@ var dispatch = map[string]entryFn{
 		}
 		return my.RelabelTagsReturning(ctx, rows)
 	},
+	"renameNote": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
+		if postgres {
+			return pg.RenameNote(ctx, str(in, "body"), i64(in, "id"))
+		}
+		return my.RenameNote(ctx, str(in, "body"), i64(in, "id"))
+	},
+	"removeNote": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
+		if postgres {
+			return pg.RemoveNote(ctx, i64(in, "id"))
+		}
+		return my.RemoveNote(ctx, i64(in, "id"))
+	},
+	"removeNotes": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
+		if postgres {
+			return pg.RemoveNotes(ctx, i64s(in, "ids"))
+		}
+		return my.RemoveNotes(ctx, i64s(in, "ids"))
+	},
+	"renameNotes": func(ctx context.Context, postgres bool, in map[string]any) (any, error) {
+		if postgres {
+			return pg.RenameNotes(ctx, i64s(in, "rows_id"), strs(in, "rows_body"))
+		}
+		rows := make([]my.RenameNotesRecord, 0)
+		for _, r := range records(in) {
+			rows = append(rows, my.RenameNotesRecord{Body: str(r, "body"), Id: i64(r, "id")})
+		}
+		return my.RenameNotes(ctx, rows)
+	},
 }
 
 // callEntry runs one vector's endpoint. The catch-all is kept as a runtime guard, but it is no

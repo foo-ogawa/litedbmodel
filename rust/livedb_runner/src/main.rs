@@ -841,6 +841,45 @@ mod imp {
                 my::relabelTagsReturning(rows).map(|r| r.to_compare())
             }
         }),
+        ("renameNote", |pg, input| {
+            let (b, id) = (in_str(input, "body"), in_i64(input, "id"));
+            if pg {
+                pg::renameNote(b, id).map(|r| r.to_compare())
+            } else {
+                my::renameNote(b, id).map(|r| r.to_compare())
+            }
+        }),
+        ("removeNote", |pg, input| {
+            let id = in_i64(input, "id");
+            if pg {
+                pg::removeNote(id).map(|r| r.to_compare())
+            } else {
+                my::removeNote(id).map(|r| r.to_compare())
+            }
+        }),
+        ("removeNotes", |pg, input| {
+            let ids = in_i64s(input, "ids");
+            if pg {
+                pg::removeNotes(ids).map(|r| r.to_compare())
+            } else {
+                my::removeNotes(ids).map(|r| r.to_compare())
+            }
+        }),
+        ("renameNotes", |pg, input| {
+            if pg {
+                pg::renameNotes(in_i64s(input, "rows_id"), in_strs(input, "rows_body"))
+                    .map(|r| r.to_compare())
+            } else {
+                let rows = in_records(input)
+                    .iter()
+                    .map(|r| my::RenameNotesRecord {
+                        body: in_str(r, "body"),
+                        id: in_i64(r, "id"),
+                    })
+                    .collect();
+                my::renameNotes(rows).map(|r| r.to_compare())
+            }
+        }),
     ];
 
     /// Compares the corpus against [`DISPATCH`]: how many DISTINCT entries it uses, and which of them

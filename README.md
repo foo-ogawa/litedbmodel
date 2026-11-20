@@ -226,12 +226,14 @@ export const Entry = EntryModel.asModel();
 | Option | Type | Description |
 |--------|------|-------------|
 | `order` | `() => OrderSpec` | Default ORDER BY for `find()` |
-| `filter` | `() => Conds` | Auto-applied WHERE conditions |
+| `filter` | `() => Conds` | WHERE conditions applied to every operation on the model's existing rows (see below) |
 | `select` | `string` | Default SELECT columns |
 | `updateTable` | `string` | Table name for INSERT/UPDATE |
 | `group` | `() => Column \| string` | Default GROUP BY |
 
 > **Note:** Options using model columns (`order`, `filter`, `group`) require lazy evaluation `() =>` because the model isn't fully defined when the decorator runs.
+
+**`filter` applies to every operation that addresses existing rows** — `find`, `findOne`, `count`, `findById`, `update`, `delete`, `updateMany`, every relation load that targets the model, and the generated code of a declared read / update / delete / `updateMany` / `deleteMany` endpoint. It is ANDed after the operation's own conditions as one group (`… AND (<filter>)`). An `update` / `delete` still needs conditions of its own: the filter alone never selects the rows to write. It does not apply to `create` / `createMany` / upsert (no existing row is selected), to raw SQL (`query` / `execute`), or to the subquery of an `exists()` / `inSubquery()` condition. A MySQL `updateMany` endpoint declared with `returning` on a model with a `filter` is rejected when the code is generated.
 
 ---
 

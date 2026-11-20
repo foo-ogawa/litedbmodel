@@ -27,6 +27,7 @@ import { assembleMakeSQL } from './makesql';
 import { sqliteInsertJson, mysqlInsertJson, sqliteUpdateManyJson, mysqlUpdateManyJson } from './json-batch';
 import { encodeJsonParam, inListPredicate } from './json-array';
 import { postgresSqlBuilder } from '../../drivers/PostgresSqlBuilder';
+import { takeScope, type ScopeFragment } from '../../drivers/types';
 import { declaredColumnTypes, sqlTypeToBcScalar, sqlTypeToMaterializeClass, type ColumnTypeResolver } from '../coltype';
 import { renderPlaceholders, type Dialect as MakeSQLDialect } from './handler';
 import { formatterFor } from './compile';
@@ -200,6 +201,28 @@ interface WriteNodeLike {
   readonly ports: Record<string, unknown>;
 }
 
+/**
+ * The model's default filter as a WHERE fragment (`scope` port, {@link ScopeFragment}), set by the lowering on every
+ * write that addresses existing rows. The write compilers AND it after the statement's own predicate.
+ */
+function scopePort(ports: Record<string, unknown>): ScopeFragment | undefined {
+  const v = ports.scope;
+  if (v === undefined) return undefined;
+  if (typeof v !== 'function') throw new Error(`compileWriteNode: port 'scope' must be the default-filter fragment builder`);
+  return v as ScopeFragment;
+}
+
+/**
+ * The scope a batch builder applies, recorded: the builder calls it with its own table alias, and the
+ * caller binds the recorded fragment's values after the builder's own `?`s.
+ */
+function recordedScope(ports: Record<string, unknown>): { scope?: ScopeFragment; taken: () => unknown[] } {
+  const scope = scopePort(ports);
+  if (scope === undefined) return { taken: () => [] };
+  let fragment: { sql: string; params: unknown[] } | undefined;
+  return { scope: (qualifier) => (fragment = scope(qualifier)), taken: () => fragment?.params ?? [] };
+}
+
 function stringPort(ports: Record<string, unknown>, name: string): string | undefined {
   const v = ports[name];
   if (v === undefined) return undefined;
@@ -323,7 +346,7 @@ function lowerWhereMember(node: unknown, at: string, dialect: MakeSQLDialect, co
   throw new Error(`compileWriteNode: ${at}: unsupported where operator '${op}' (write path supports eq/ne/lt/le/gt/ge)`);
 }
 
-function lowerWherePort(ports: Record<string, unknown>, at: string, dialect: MakeSQLDialect, columnType: (column: string) => string | undefined): { sql: string; params: TxExpr[]; columns: string[] } {
+function lowerWherePort(ports: Record<string, unknown>, at: string, dialect: MakeSQLDialect, columnType: (column: string) => string | undefined): { sql: string; params: TxExpr[]; columns: (string | null)[] } {
   const v = ports.where;
   if (v === undefined) return { sql: '', params: [], columns: [] };
   if (typeof v !== 'object' || v === null || !('arr' in v) || !Array.isArray((v as { arr: unknown }).arr)) {
@@ -332,13 +355,22 @@ function lowerWherePort(ports: Record<string, unknown>, at: string, dialect: Mak
   const members = (v as { arr: unknown[] }).arr;
   const parts: string[] = [];
   const params: TxExpr[] = [];
-  const columns: string[] = [];
+  const columns: (string | null)[] = [];
   members.forEach((m, i) => {
     const f = lowerWhereMember(m, `${at}.where[${i}]`, dialect, columnType);
     parts.push(f.sql);
     params.push(...f.params);
     columns.push(...f.columns);
   });
+  // The model's default filter, AFTER the declared members: one group, its constants bound last (they
+  // bind no column — `null`).
+  const scoped: unknown[] = [];
+  const filter = takeScope(scopePort(ports), scoped);
+  if (filter !== '') {
+    parts.push(filter);
+    params.push(...(scoped as TxExpr[]));
+    columns.push(...scoped.map(() => null));
+  }
   // Join with the SAME ` AND ` connector `DBConditions.compile` uses (parts.join(' AND ')).
   return { sql: parts.join(' AND '), params, columns };
 }
@@ -457,13 +489,16 @@ function pgBatchUpdate(table: string, keyCols: string[], updateCols: string[], k
   const returning = returningPort === undefined
     ? undefined
     : postgresSqlBuilder.buildReturning(table, returningPort.split(',').map((c) => c.trim()).filter((c) => c.length > 0), 't');
+  const scope = recordedScope(ports);
   const { sql } = postgresSqlBuilder.buildUpdateMany({
     tableName: table, keyColumns: keyCols, updateColumns: updateCols, records, rawRecords: records,
     ...(returning !== undefined ? { returning } : {}),
+    ...(scope.scope !== undefined ? { scope: scope.scope } : {}),
   });
-  // One array param per UNNEST column in [keyCols…, updateCols…] order (matches buildUpdateMany).
+  // One array param per UNNEST column in [keyCols…, updateCols…] order (matches buildUpdateMany), then the
+  // default filter's constants (the builder puts its fragment LAST in the WHERE).
   const refFor = (c: string): TxExpr => (keyCols.includes(c) ? key[c] : set[c]);
-  return { sql, params: pgBatchArrayParams(allCols, refFor, dialect) };
+  return { sql, params: [...pgBatchArrayParams(allCols, refFor, dialect), ...(scope.taken() as TxExpr[])] };
 }
 
 /**
@@ -569,18 +604,27 @@ function compileWriteNodeSql(node: WriteNodeLike, dialect: MakeSQLDialect, resol
         // No records exist at compile, so the MySQL JSON_TABLE columns — the KEY included — are typed from
         // the schema (#381); without it the key would be read as text and compared with the column as DOUBLE.
         const columnTypes = resolveColumnType === undefined ? undefined : declaredColumnTypes(resolveColumnType, table, [...keyCols, ...updateCols]);
-        const shapeOpts = { tableName: table, keyColumns: keyCols, updateColumns: updateCols, records: [] as Record<string, unknown>[], ...(columnTypes !== undefined ? { columnTypes } : {}), ...(stringPort(ports, 'returning') !== undefined ? { returning: stringPort(ports, 'returning') } : {}) };
+        const scope = recordedScope(ports);
+        const shapeOpts = { tableName: table, keyColumns: keyCols, updateColumns: updateCols, records: [] as Record<string, unknown>[], ...(columnTypes !== undefined ? { columnTypes } : {}), ...(stringPort(ports, 'returning') !== undefined ? { returning: stringPort(ports, 'returning') } : {}), ...(scope.scope !== undefined ? { scope: scope.scope } : {}) };
         const shape = dialect === 'mysql' ? mysqlUpdateManyJson(shapeOpts) : sqliteUpdateManyJson(shapeOpts);
         // The JSON carries BOTH the key + update columns (in that order); one marker per `?`.
         const columns = [...keyCols, ...updateCols];
         const refs = [...keyCols.map((c) => key[c]), ...updateCols.map((c) => set[c])];
-        const nQ = (shape.sql.match(/\?/g) ?? []).length;
+        // Every `?` of the builder's own binds the records marker; the default filter's constants follow them.
+        const scoped = scope.taken() as TxExpr[];
+        // MySQL recovers a batch UPDATE's RETURNING rows by the batch keys AFTER the write, in every language
+        // runtime — which a default filter (a row the keys name but the filter excludes, or one the write moves
+        // out of it) would answer wrongly. Refused here rather than returning rows the write did not write.
+        if (dialect === 'mysql' && scoped.length > 0 && stringPort(ports, 'returning') !== undefined) {
+          throw new Error(`compileWriteNode: a MySQL batch UPDATE … RETURNING on a model with a default filter (@model({ filter })) cannot recover exactly the rows it writes — declare it without RETURNING`);
+        }
+        const nQ = (shape.sql.match(/\?/g) ?? []).length - scoped.length;
         const marker = { __batchRows: { columns, refs, dialect } };
         // Carry `pk` (the SAME pkPort SSoT) so the mysql RETURNING re-select orders the recovered rows by
         // the real key (matching pg/sqlite RETURNING order). `batch:true` keeps the tx-chain rejecting it.
         const pk = pkPort(ports);
         const writeMeta = { table, bindColumns: columns, returning: returningColumns(ports), batch: true };
-        return { sql: shape.sql, params: Array.from({ length: nQ }, () => marker), ...(pk !== undefined ? { pk } : {}), writeMeta };
+        return { sql: shape.sql, params: [...Array.from({ length: nQ }, () => marker), ...scoped], ...(pk !== undefined ? { pk } : {}), writeMeta };
       }
       // An absent `where` port is an UNCONDITIONAL update — `UPDATE … SET …` with no tail. The port
       // carries the structured `{arr:[…]}` member list and is lowered INLINE here; nothing appends a

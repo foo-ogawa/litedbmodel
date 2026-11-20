@@ -2051,5 +2051,125 @@ def remove_tags_returning(ids):
     return t_n0
 
 
+def rename_note(body, id):
+    t_n0 = None
+    produced_n0 = False
+    # op 'n0' (executeSQL)
+    payload_n0 = {"opts": {"db": None, "guard": None, "whereDynamic": None, "write": {"returning": False}}, "params": [body, id, 0], "sql": "UPDATE conf_notes SET body = ? WHERE id = ? AND (archived = ?)"}
+    try:
+        w_n0 = _bc_leaf_execute_sql(payload_n0)
+    except Exception as err_n0:
+        raise _bc_op_failed("n0", "fail", err_n0) from err_n0
+    if (not _bc_isinstance(w_n0, _bc_list)):
+        raise _bc_mismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", w_n0)
+    d1 = []
+    for d2 in w_n0:
+        if (not _bc_isinstance(d2, _bc_dict)):
+            raise _bc_mismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", d2)
+        d3 = {}
+        if ("changes" in d2):
+            d3["changes"] = _bc_de_int(d2["changes"], "WriteSummary", "changes", "int")
+        else:
+            raise _bc_missing("WriteSummary", "changes", "int")
+        if ("lastInsertRowid" in d2):
+            d3["lastInsertRowid"] = _bc_de_int(d2["lastInsertRowid"], "WriteSummary", "lastInsertRowid", "int")
+        else:
+            raise _bc_missing("WriteSummary", "lastInsertRowid", "int")
+        d1.append(d3)
+    t_n0 = d1
+    produced_n0 = True
+    return t_n0
+
+
+def remove_note(id):
+    t_n0 = None
+    produced_n0 = False
+    # op 'n0' (executeSQL)
+    payload_n0 = {"opts": {"db": None, "guard": None, "whereDynamic": None, "write": {"returning": False}}, "params": [id, 0], "sql": "DELETE FROM conf_notes WHERE id = ? AND (archived = ?)"}
+    try:
+        w_n0 = _bc_leaf_execute_sql(payload_n0)
+    except Exception as err_n0:
+        raise _bc_op_failed("n0", "fail", err_n0) from err_n0
+    if (not _bc_isinstance(w_n0, _bc_list)):
+        raise _bc_mismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", w_n0)
+    d1 = []
+    for d2 in w_n0:
+        if (not _bc_isinstance(d2, _bc_dict)):
+            raise _bc_mismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", d2)
+        d3 = {}
+        if ("changes" in d2):
+            d3["changes"] = _bc_de_int(d2["changes"], "WriteSummary", "changes", "int")
+        else:
+            raise _bc_missing("WriteSummary", "changes", "int")
+        if ("lastInsertRowid" in d2):
+            d3["lastInsertRowid"] = _bc_de_int(d2["lastInsertRowid"], "WriteSummary", "lastInsertRowid", "int")
+        else:
+            raise _bc_missing("WriteSummary", "lastInsertRowid", "int")
+        d1.append(d3)
+    t_n0 = d1
+    produced_n0 = True
+    return t_n0
+
+
+def remove_notes(ids):
+    t_n0 = None
+    produced_n0 = False
+    # op 'n0' (executeSQL)
+    payload_n0 = {"opts": {"db": None, "guard": None, "whereDynamic": None, "write": {"returning": False}}, "params": [ids, 0], "sql": "DELETE FROM conf_notes WHERE id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt) AND (archived = ?)"}
+    try:
+        w_n0 = _bc_leaf_execute_sql(payload_n0)
+    except Exception as err_n0:
+        raise _bc_op_failed("n0", "fail", err_n0) from err_n0
+    if (not _bc_isinstance(w_n0, _bc_list)):
+        raise _bc_mismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", w_n0)
+    d1 = []
+    for d2 in w_n0:
+        if (not _bc_isinstance(d2, _bc_dict)):
+            raise _bc_mismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", d2)
+        d3 = {}
+        if ("changes" in d2):
+            d3["changes"] = _bc_de_int(d2["changes"], "WriteSummary", "changes", "int")
+        else:
+            raise _bc_missing("WriteSummary", "changes", "int")
+        if ("lastInsertRowid" in d2):
+            d3["lastInsertRowid"] = _bc_de_int(d2["lastInsertRowid"], "WriteSummary", "lastInsertRowid", "int")
+        else:
+            raise _bc_missing("WriteSummary", "lastInsertRowid", "int")
+        d1.append(d3)
+    t_n0 = d1
+    produced_n0 = True
+    return t_n0
+
+
+def rename_notes(rows):
+    t_n0 = None
+    produced_n0 = False
+    # op 'n0' (executeSQL)
+    payload_n0 = {"opts": {"db": None, "guard": None, "whereDynamic": None, "write": {"returning": False}}, "params": [rows, 0], "sql": "UPDATE conf_notes AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(id DECIMAL(65,30) PATH '$.id', body JSON PATH '$.body')) AS v ON u.id = v.id SET u.body = JSON_UNQUOTE(v.body) WHERE (u.archived = ?)"}
+    try:
+        w_n0 = _bc_leaf_execute_sql(payload_n0)
+    except Exception as err_n0:
+        raise _bc_op_failed("n0", "fail", err_n0) from err_n0
+    if (not _bc_isinstance(w_n0, _bc_list)):
+        raise _bc_mismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", w_n0)
+    d1 = []
+    for d2 in w_n0:
+        if (not _bc_isinstance(d2, _bc_dict)):
+            raise _bc_mismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", d2)
+        d3 = {}
+        if ("changes" in d2):
+            d3["changes"] = _bc_de_int(d2["changes"], "WriteSummary", "changes", "int")
+        else:
+            raise _bc_missing("WriteSummary", "changes", "int")
+        if ("lastInsertRowid" in d2):
+            d3["lastInsertRowid"] = _bc_de_int(d2["lastInsertRowid"], "WriteSummary", "lastInsertRowid", "int")
+        else:
+            raise _bc_missing("WriteSummary", "lastInsertRowid", "int")
+        d1.append(d3)
+    t_n0 = d1
+    produced_n0 = True
+    return t_n0
+
+
 # The components on the native path (declaration order) — each a 1:1 entry <name>(<positional params>).
-COMPONENT_NAMES_NATIVE = ("posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "optionalOnlyFeed", "quotedOrderFeed", "quotedWhereOrderFeed", "viewFeed", "usersWithPosts", "postsWithAuthor", "notes", "notesByAuthor", "usersWithFilteredRelations", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createDoc", "createLine", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning")
+COMPONENT_NAMES_NATIVE = ("posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "optionalOnlyFeed", "quotedOrderFeed", "quotedWhereOrderFeed", "viewFeed", "usersWithPosts", "postsWithAuthor", "notes", "notesByAuthor", "usersWithFilteredRelations", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createDoc", "createLine", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning", "renameNote", "removeNote", "removeNotes", "renameNotes")

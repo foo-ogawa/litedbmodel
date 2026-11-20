@@ -184,10 +184,10 @@ export function tableNameOf(modelClass: ModelClassLike): string {
  * serialized for `dialect` — what a declared read and a relation batch AND on, as v1's select builder
  * does for every `find`. `undefined` when the model declares none.
  */
-export function findFilterOf(modelClass: ModelClassLike, dialect: DialectName): ConditionObject | undefined {
+export function findFilterOf(modelClass: ModelClassLike, dialect: DialectName, qualifier?: string): ConditionObject | undefined {
   const filter = modelClass.FIND_FILTER;
   if (!filter) return undefined;
-  return condsToRecord(filter, getTypeCast(dialect)) as ConditionObject;
+  return condsToRecord(filter, getTypeCast(dialect), qualifier) as ConditionObject;
 }
 
 /**

@@ -592,6 +592,15 @@ const ENDPOINTS: EndpointSet = {
   createTagsReturning: { kind: 'createMany', model: ConfTag, columns: ['id', 'post_id', 'label'], param: 'rows', returning: ['id', 'label'] },
   relabelTagsReturning: { kind: 'updateMany', model: ConfTag, keyColumns: ['id'], columns: ['label'], param: 'rows', returning: ['id', 'label'] },
   removeTagsReturning: { kind: 'deleteMany', model: ConfTag, keyColumn: 'id', param: 'ids', returning: ['id', 'label'] },
+  /**
+   * The default filter on every WRITE that addresses existing rows: a single UPDATE / DELETE, a key-set
+   * DELETE and a batch UPDATE all AND `archived = 0` after their own predicate, so the archived note 2
+   * is never written, whatever key names it.
+   */
+  renameNote: { kind: 'update', model: ConfNote, set: [{ column: 'body', param: 'body' }], where: [{ column: 'id', op: 'eq', param: 'id' }] },
+  removeNote: { kind: 'delete', model: ConfNote, where: [{ column: 'id', op: 'eq', param: 'id' }] },
+  removeNotes: { kind: 'deleteMany', model: ConfNote, keyColumn: 'id', param: 'ids' },
+  renameNotes: { kind: 'updateMany', model: ConfNote, keyColumns: ['id'], columns: ['body'], param: 'rows' },
 };
 
 /**
@@ -1122,6 +1131,7 @@ interface ExecCase {
 
 const POSTS_STATE = 'SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id';
 const TAGS_STATE = 'SELECT id, post_id, label FROM conf_tags ORDER BY id';
+const NOTES_STATE = 'SELECT id, author_id, body, archived FROM conf_notes ORDER BY id';
 const DOCS_STATE = 'SELECT doc_id, title FROM conf_docs ORDER BY doc_id';
 const LINES_STATE = 'SELECT order_id, line_no, sku FROM conf_lines ORDER BY order_id, line_no';
 
@@ -1248,6 +1258,21 @@ const EXEC_CASES: readonly ExecCase[] = [
     dbState: [TAGS_STATE],
   },
   { id: 'removeTagsReturning: batch DELETE … RETURNING returns every removed row', entry: 'removeTagsReturning', input: { ids: [100, 101] }, writes: true, dbState: [TAGS_STATE] },
+  // The default filter on writes: note 2 is archived, so naming it changes nothing (note 1 / 3 are live).
+  { id: 'renameNote: UPDATE leaves a row the default filter excludes', entry: 'renameNote', input: { body: 'renamed', id: 2 }, writes: true, dbState: [NOTES_STATE] },
+  { id: 'renameNote: UPDATE writes a row the default filter admits', entry: 'renameNote', input: { body: 'renamed', id: 1 }, writes: true, dbState: [NOTES_STATE] },
+  { id: 'removeNote: DELETE leaves a row the default filter excludes', entry: 'removeNote', input: { id: 2 }, writes: true, dbState: [NOTES_STATE] },
+  { id: 'removeNotes: batch DELETE removes only the rows the default filter admits', entry: 'removeNotes', input: { ids: [1, 2] }, writes: true, dbState: [NOTES_STATE] },
+  {
+    id: 'renameNotes: batch UPDATE writes only the rows the default filter admits',
+    entry: 'renameNotes',
+    input: (d) =>
+      d === 'postgres'
+        ? { rows_id: [1, 2], rows_body: ['one', 'two'] }
+        : { rows: [{ id: 1, body: 'one' }, { id: 2, body: 'two' }] },
+    writes: true,
+    dbState: [NOTES_STATE],
+  },
   // #130 — a write that DECLARES a RETURNING hands back the rows it wrote, on every dialect. The
   // UPDATE's row carries its NEW title (it is described after the write); the DELETE's is the
   // pre-image (described before it), and `dbState` proves the delete still happened.

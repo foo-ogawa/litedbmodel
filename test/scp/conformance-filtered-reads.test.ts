@@ -48,3 +48,29 @@ describe('conformance corpus: filtered reads', () => {
     }
   });
 });
+
+describe('conformance corpus: filtered writes', () => {
+  type State = { query: string; rows: Array<{ id: { $bigint: string }; body: string }> }[];
+  const notesOf = (v: Vector) =>
+    ((v as unknown as { expectedDbState: State }).expectedDbState[0].rows).map((r) => [idOf(r), r.body]);
+  const vectorOf = (entry: string, input: Record<string, unknown>) =>
+    vectorsOf(entry).filter((v) => JSON.stringify(v.input) === JSON.stringify(input));
+
+  it('holds every filtered write on all three dialects', () => {
+    for (const entry of ['renameNote', 'removeNote', 'removeNotes', 'renameNotes']) {
+      expect(new Set(vectorsOf(entry).map((v) => v.dialect))).toEqual(new Set(['mysql', 'postgres', 'sqlite']));
+    }
+  });
+
+  it('a single UPDATE / DELETE writes only the rows the default filter admits', () => {
+    const seed = [[1, 'n1'], [2, 'n2 archived'], [3, 'n3'], [4, 'n4 archived']];
+    for (const v of vectorOf('renameNote', { body: 'renamed', id: 2 })) expect(notesOf(v)).toEqual(seed);
+    for (const v of vectorOf('renameNote', { body: 'renamed', id: 1 })) expect(notesOf(v)[0]).toEqual([1, 'renamed']);
+    for (const v of vectorOf('removeNote', { id: 2 })) expect(notesOf(v)).toEqual(seed);
+  });
+
+  it('a batch DELETE / UPDATE writes only the rows the default filter admits', () => {
+    for (const v of vectorsOf('removeNotes')) expect(notesOf(v).map(([id]) => id)).toEqual([2, 3, 4]);
+    for (const v of vectorsOf('renameNotes')) expect(notesOf(v).slice(0, 2)).toEqual([[1, 'one'], [2, 'n2 archived']]);
+  });
+});

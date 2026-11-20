@@ -20,6 +20,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - `DBModel.groupByProperty` が、値が `constructor`・`__proto__` の行で例外を送出し、`hashByProperty` が値が
   `__proto__` の行を落としていた。
 - 対象のモデルが `@model({ filter })` を持つ場合に、`limit` 付きの hasMany の読み込みだけ filter が適用されていなかった。
+- SCP の宣言 endpoint の生成物（5 言語）の relation が、relation の `where` と対象のモデルの `@model({ filter })` を適用していなかった。
 - `litedbmodel/drivers` の JSON の補助関数（SQLite の `jsonStringArray`・`jsonObject`・`jsonIntArray`、MySQL の
   `mysqlJson*`）が、値を SQL の文字列の規則で encode せずに文面へ埋め込んでいた。SQLite は `'` を二重化し、MySQL は
   UTF-8 の 16 進の literal として埋め込む。数値の補助関数（`pgIntArray`・`pgNumericArray`・`*TimeAfter`・`*DayAfter`）は、
@@ -35,6 +36,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - `npm-audit-remediate.yml` が、依存を導入・実行する段と、書き込みの権限で push・issue の作成を行う段を、同じ job で
   実行していた。依存を実行する job を読み取りの権限だけにし、push・issue の作成を別の job に分けた。書き込みの job は
   lockfile 以外の変更を含む差分を適用しない。
+
+### Changed
+
+- **`@model({ filter })` を、モデルの既存の行を対象にする全ての操作に適用する。** `find`・`findOne`・`count` に加えて、`findById`・`update`・`delete`・`updateMany`、対象のモデルへの relation の読み込み、SCP の宣言 endpoint の生成物（read・update・delete・`updateMany`・`deleteMany`）にも適用する。操作の自身の条件の後ろに 1 つの括弧の組として AND で加える。`update`・`delete` は、filter を除いた自身の条件が無ければ従来どおり例外とする。`create`・`createMany`・upsert・生の SQL・`exists()`／`inSubquery()` の副問い合わせには適用しない。
+  - 従来は `find`・`findOne`・`count`・limit の無い relation の読み込みだけに適用していた。`findById`・`update`・`delete`・`updateMany` で filter の外の行を読み書きしていた利用者は、挙動が変わる。
+  - MySQL の宣言 endpoint の `updateMany` を `returning` 付きで宣言し、対象のモデルが filter を持つ場合は、生成の時に誤りとする（書き込んだ行だけを正しく返せないため）。
 
 ### Removed
 

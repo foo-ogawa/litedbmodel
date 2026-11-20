@@ -45,7 +45,7 @@ export interface ModelOptions {
   /** DEFAULT_ORDER: Returns OrderSpec for default ordering */
   order?: () => OrderSpec;
 
-  /** FIND_FILTER: Returns Conds for automatic filtering in find() */
+  /** FIND_FILTER: Returns Conds applied to every operation on the model's existing rows (find / findById / count / update / delete / updateMany / relations) */
   filter?: () => Conds;
 
   /** SELECT_COLUMN: Column selection string (default: '*') */

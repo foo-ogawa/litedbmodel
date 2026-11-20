@@ -37,7 +37,7 @@ namespace {
         public const EXPECTED_SPEC_VERSIONS = ['behavior' => 6, 'expression' => 2, 'plan' => 1];
 
         /** The components on the native path (declaration order) — each a 1:1 entry <name>(<positional params>). */
-        public const COMPONENT_NAMES_NATIVE = ["posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "optionalOnlyFeed", "quotedOrderFeed", "quotedWhereOrderFeed", "viewFeed", "usersWithPosts", "postsWithAuthor", "notes", "notesByAuthor", "usersWithFilteredRelations", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createDoc", "createLine", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning"];
+        public const COMPONENT_NAMES_NATIVE = ["posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "optionalOnlyFeed", "quotedOrderFeed", "quotedWhereOrderFeed", "viewFeed", "usersWithPosts", "postsWithAuthor", "notes", "notesByAuthor", "usersWithFilteredRelations", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createDoc", "createLine", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning", "renameNote", "removeNote", "removeNotes", "renameNotes"];
 
         public static function posts(mixed $authorId): mixed
         {
@@ -2428,6 +2428,154 @@ namespace {
                     $d3->label = (($d5 === null) ? null : self::deString($d5, "RemoveTagsReturningRow", "label", "opt(string)"));
                 } else {
                     $d3->label = null;
+                }
+                $d1[] = $d3;
+            }
+            $t_n0 = $d1;
+            $produced_n0 = true;
+            return $t_n0;
+        }
+
+        public static function renameNote(mixed $body, mixed $id): mixed
+        {
+            $t_n0 = null;
+            $produced_n0 = false;
+            // op 'n0' (executeSQL)
+            $payload_n0 = ["opts" => (object) ["db" => null, "guard" => null, "whereDynamic" => null, "write" => (object) ["returning" => false]], "params" => [$body, $id, 0], "sql" => "UPDATE conf_notes SET body = ? WHERE id = ? AND (archived = ?)"];
+            try {
+                $w_n0 = \LiteDbModel\Runtime\Leaves::executeSQL($payload_n0);
+            } catch (\Exception $err_n0) {
+                throw self::opFailed("n0", "fail", $err_n0);
+            }
+            if ((!(\is_array($w_n0) && \array_is_list($w_n0)))) {
+                throw self::mismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", $w_n0);
+            }
+            $d1 = [];
+            foreach ($w_n0 as $d2) {
+                if ((!($d2 instanceof \stdClass))) {
+                    throw self::mismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", $d2);
+                }
+                $d3 = new \stdClass();
+                if (\property_exists($d2, "changes")) {
+                    $d3->changes = self::deInt($d2->changes, "WriteSummary", "changes", "int");
+                } else {
+                    throw self::missing("WriteSummary", "changes", "int");
+                }
+                if (\property_exists($d2, "lastInsertRowid")) {
+                    $d3->lastInsertRowid = self::deInt($d2->lastInsertRowid, "WriteSummary", "lastInsertRowid", "int");
+                } else {
+                    throw self::missing("WriteSummary", "lastInsertRowid", "int");
+                }
+                $d1[] = $d3;
+            }
+            $t_n0 = $d1;
+            $produced_n0 = true;
+            return $t_n0;
+        }
+
+        public static function removeNote(mixed $id): mixed
+        {
+            $t_n0 = null;
+            $produced_n0 = false;
+            // op 'n0' (executeSQL)
+            $payload_n0 = ["opts" => (object) ["db" => null, "guard" => null, "whereDynamic" => null, "write" => (object) ["returning" => false]], "params" => [$id, 0], "sql" => "DELETE FROM conf_notes WHERE id = ? AND (archived = ?)"];
+            try {
+                $w_n0 = \LiteDbModel\Runtime\Leaves::executeSQL($payload_n0);
+            } catch (\Exception $err_n0) {
+                throw self::opFailed("n0", "fail", $err_n0);
+            }
+            if ((!(\is_array($w_n0) && \array_is_list($w_n0)))) {
+                throw self::mismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", $w_n0);
+            }
+            $d1 = [];
+            foreach ($w_n0 as $d2) {
+                if ((!($d2 instanceof \stdClass))) {
+                    throw self::mismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", $d2);
+                }
+                $d3 = new \stdClass();
+                if (\property_exists($d2, "changes")) {
+                    $d3->changes = self::deInt($d2->changes, "WriteSummary", "changes", "int");
+                } else {
+                    throw self::missing("WriteSummary", "changes", "int");
+                }
+                if (\property_exists($d2, "lastInsertRowid")) {
+                    $d3->lastInsertRowid = self::deInt($d2->lastInsertRowid, "WriteSummary", "lastInsertRowid", "int");
+                } else {
+                    throw self::missing("WriteSummary", "lastInsertRowid", "int");
+                }
+                $d1[] = $d3;
+            }
+            $t_n0 = $d1;
+            $produced_n0 = true;
+            return $t_n0;
+        }
+
+        public static function removeNotes(mixed $ids): mixed
+        {
+            $t_n0 = null;
+            $produced_n0 = false;
+            // op 'n0' (executeSQL)
+            $payload_n0 = ["opts" => (object) ["db" => null, "guard" => null, "whereDynamic" => null, "write" => (object) ["returning" => false]], "params" => [$ids, 0], "sql" => "DELETE FROM conf_notes WHERE id IN (SELECT v FROM JSON_TABLE(?, '\$[*]' COLUMNS(v DECIMAL(65,30) PATH '\$')) jt) AND (archived = ?)"];
+            try {
+                $w_n0 = \LiteDbModel\Runtime\Leaves::executeSQL($payload_n0);
+            } catch (\Exception $err_n0) {
+                throw self::opFailed("n0", "fail", $err_n0);
+            }
+            if ((!(\is_array($w_n0) && \array_is_list($w_n0)))) {
+                throw self::mismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", $w_n0);
+            }
+            $d1 = [];
+            foreach ($w_n0 as $d2) {
+                if ((!($d2 instanceof \stdClass))) {
+                    throw self::mismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", $d2);
+                }
+                $d3 = new \stdClass();
+                if (\property_exists($d2, "changes")) {
+                    $d3->changes = self::deInt($d2->changes, "WriteSummary", "changes", "int");
+                } else {
+                    throw self::missing("WriteSummary", "changes", "int");
+                }
+                if (\property_exists($d2, "lastInsertRowid")) {
+                    $d3->lastInsertRowid = self::deInt($d2->lastInsertRowid, "WriteSummary", "lastInsertRowid", "int");
+                } else {
+                    throw self::missing("WriteSummary", "lastInsertRowid", "int");
+                }
+                $d1[] = $d3;
+            }
+            $t_n0 = $d1;
+            $produced_n0 = true;
+            return $t_n0;
+        }
+
+        public static function renameNotes(mixed $rows): mixed
+        {
+            $t_n0 = null;
+            $produced_n0 = false;
+            // op 'n0' (executeSQL)
+            $payload_n0 = ["opts" => (object) ["db" => null, "guard" => null, "whereDynamic" => null, "write" => (object) ["returning" => false]], "params" => [$rows, 0], "sql" => "UPDATE conf_notes AS u JOIN JSON_TABLE(?, '\$[*]' COLUMNS(id DECIMAL(65,30) PATH '\$.id', body JSON PATH '\$.body')) AS v ON u.id = v.id SET u.body = JSON_UNQUOTE(v.body) WHERE (u.archived = ?)"];
+            try {
+                $w_n0 = \LiteDbModel\Runtime\Leaves::executeSQL($payload_n0);
+            } catch (\Exception $err_n0) {
+                throw self::opFailed("n0", "fail", $err_n0);
+            }
+            if ((!(\is_array($w_n0) && \array_is_list($w_n0)))) {
+                throw self::mismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", $w_n0);
+            }
+            $d1 = [];
+            foreach ($w_n0 as $d2) {
+                if ((!($d2 instanceof \stdClass))) {
+                    throw self::mismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", $d2);
+                }
+                $d3 = new \stdClass();
+                if (\property_exists($d2, "changes")) {
+                    $d3->changes = self::deInt($d2->changes, "WriteSummary", "changes", "int");
+                } else {
+                    throw self::missing("WriteSummary", "changes", "int");
+                }
+                if (\property_exists($d2, "lastInsertRowid")) {
+                    $d3->lastInsertRowid = self::deInt($d2->lastInsertRowid, "WriteSummary", "lastInsertRowid", "int");
+                } else {
+                    throw self::missing("WriteSummary", "lastInsertRowid", "int");
                 }
                 $d1[] = $d3;
             }
