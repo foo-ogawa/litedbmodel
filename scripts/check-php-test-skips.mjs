@@ -148,6 +148,7 @@ const LIVE_TESTS = [
   'LiteDbModel\\Runtime\\Tests\\ConnectionRoutingLiveTest::testQueryTimeoutFiresOnPg',
   'LiteDbModel\\Runtime\\Tests\\ConnectionRoutingLiveTest::testReaderWriterSplit',
   'LiteDbModel\\Runtime\\Tests\\ConnectionRoutingLiveTest::testSearchPathAppliedAndResetOnPg',
+  'LiteDbModel\\Runtime\\Tests\\ConnectionRoutingLiveTest::testSessionConfigAppliedInsideRoutedTransactionOnPg',
   'LiteDbModel\\Runtime\\Tests\\ConnectionRoutingLiveTest::testSetConfigBuildsWorkingPoolAndCloseAllPools',
   'LiteDbModel\\Runtime\\Tests\\ConnectionRoutingLiveTest::testUnknownConnectionNameIsLoud',
   'LiteDbModel\\Runtime\\Tests\\ConnectionRoutingLiveTest::testWithWriterScope',
