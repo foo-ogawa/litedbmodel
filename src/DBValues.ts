@@ -92,6 +92,32 @@ export class DBImmediateValue extends DBToken {
   }
 }
 
+/**
+ * A value spliced INTO an immediate SQL text (a {@link DBImmediateValue} the driver helpers build) is part
+ * of the statement, so it must be encoded for the statement's lexical rules. These two are the rules the
+ * helpers share.
+ */
+
+/**
+ * The content of a standard SQL string literal (`'…'`): every `'` doubled. Complete for SQLite and for
+ * PostgreSQL (standard_conforming_strings, the default since 9.1). NOT for MySQL, whose default sql_mode
+ * also reads `\` as an escape. @internal
+ */
+export function escapeSqlQuotes(text: string): string {
+  return text.replace(/'/g, "''");
+}
+
+/**
+ * A number rendered inline as SQL text: only a finite `number` may reach it. A request value is a string
+ * at run time whatever the `number` type says, and spliced as text it becomes SQL. @internal
+ */
+export function numberText(value: unknown, what: string): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new TypeError(`${what} must be a finite number (got ${typeof value})`);
+  }
+  return String(value);
+}
+
 // ============================================
 // DBNullValue - NULL value
 // ============================================

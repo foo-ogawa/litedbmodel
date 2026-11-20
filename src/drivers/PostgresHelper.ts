@@ -4,7 +4,7 @@
  * Provides type conversion utilities and PostgreSQL-specific helpers.
  */
 
-import { DBImmediateValue } from '../DBValues';
+import { DBImmediateValue, escapeSqlQuotes, numberText } from '../DBValues';
 
 // ============================================
 // Type Casting: DB -> TypeScript
@@ -272,7 +272,7 @@ export function pgIntArray(
   if (val.length === 0) {
     return new DBImmediateValue(`ARRAY[]::${type}[]`);
   }
-  return new DBImmediateValue(`ARRAY[${val.join(',')}]::${type}[]`);
+  return new DBImmediateValue(`ARRAY[${val.map((v) => numberText(v, 'pgIntArray element')).join(',')}]::${type}[]`);
 }
 
 /**
@@ -285,7 +285,7 @@ export function pgNumericArray(
   if (val.length === 0) {
     return new DBImmediateValue(`ARRAY[]::${type}[]`);
   }
-  const elements = val.map((v) => (v === null ? 'NULL' : String(v)));
+  const elements = val.map((v) => (v === null ? 'NULL' : numberText(v, 'pgNumericArray element')));
   return new DBImmediateValue(`ARRAY[${elements.join(',')}]::${type}[]`);
 }
 
@@ -331,14 +331,14 @@ export function TimeAfter(
   val: number,
   interval: 'second' | 'minute' | 'hour' | 'day'
 ): DBImmediateValue {
-  return new DBImmediateValue(`NOW() + INTERVAL '${val} ${interval}'`);
+  return new DBImmediateValue(`NOW() + INTERVAL '${numberText(val, 'TimeAfter value')} ${interval}'`);
 }
 
 /**
  * Generate interval after specific date
  */
 export function DayAfter(val: number, interval: string = 'day'): DBImmediateValue {
-  return new DBImmediateValue(`NOW() + INTERVAL '${val} ${interval}'`);
+  return new DBImmediateValue(`NOW() + INTERVAL '${numberText(val, 'DayAfter value')} ${interval}'`);
 }
 
 // ============================================
@@ -359,7 +359,7 @@ export function empty2null<T>(val: T): T | DBImmediateValue {
  * Default escape function for SQL strings
  */
 function defaultEscape(s: string): string {
-  return s.replace(/'/g, "''");
+  return escapeSqlQuotes(s);
 }
 
 /**
