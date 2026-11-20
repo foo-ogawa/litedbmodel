@@ -14,6 +14,7 @@ import { resolveTxOptions } from '../scp/tx-options';
 
 // pg types (loaded dynamically)
 type Pool = import('pg').Pool;
+type PoolConfig = import('pg').PoolConfig;
 type PoolClient = import('pg').PoolClient;
 
 // ============================================
@@ -46,10 +47,32 @@ function getPgModule(): typeof import('pg') {
 }
 
 /**
- * Get pool cache key from config
+ * The options a pool is constructed from — the ONE derivation both the pool and its cache key read.
+ */
+function poolOptions(config: DBConfig): PoolConfig {
+  return {
+    host: config.host,
+    port: config.port,
+    database: config.database,
+    user: config.user,
+    password: config.password,
+    max: config.max || 10,
+    connectionTimeoutMillis: (config.timeout || 30) * 1000,
+    idleTimeoutMillis: config.idleTimeoutMillis ?? 10000,
+    query_timeout: (config.queryTimeout || 30) * 1000,
+    // Server-side limit too: query_timeout alone leaves the statement (and its locks) running
+    statement_timeout: (config.queryTimeout || 30) * 1000,
+    keepAlive: config.keepAlive,
+    keepAliveInitialDelayMillis: config.keepAliveInitialDelayMillis,
+  };
+}
+
+/**
+ * Get pool cache key from config: every option the pool is built from (the credentials included), so two
+ * configs share a pool only when they would build the same one.
  */
 function getPoolKey(config: DBConfig): string {
-  return `${config.host}:${config.port}/${config.database}`;
+  return JSON.stringify(poolOptions(config));
 }
 
 /**
@@ -61,21 +84,7 @@ function getPool(config: DBConfig): Pool {
   let pool = pools.get(key);
   if (!pool) {
     const { Pool } = getPgModule();
-    pool = new Pool({
-      host: config.host,
-      port: config.port,
-      database: config.database,
-      user: config.user,
-      password: config.password,
-      max: config.max || 10,
-      connectionTimeoutMillis: (config.timeout || 30) * 1000,
-      idleTimeoutMillis: config.idleTimeoutMillis ?? 10000,
-      query_timeout: (config.queryTimeout || 30) * 1000,
-      // Server-side limit too: query_timeout alone leaves the statement (and its locks) running
-      statement_timeout: (config.queryTimeout || 30) * 1000,
-      keepAlive: config.keepAlive,
-      keepAliveInitialDelayMillis: config.keepAliveInitialDelayMillis,
-    });
+    pool = new Pool(poolOptions(config));
     guardIdlePoolErrors(pool, defaultLogger);
     pools.set(key, pool);
   }
