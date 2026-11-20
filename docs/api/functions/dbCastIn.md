@@ -6,7 +6,7 @@
 function dbCastIn(values: unknown[], sqlType: string): DBCastArray;
 ```
 
-Defined in: [DBValues.ts:529](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBValues.ts#L529)
+Defined in: [DBValues.ts:555](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBValues.ts#L555)
 
 Create a type-cast array for IN clause
 

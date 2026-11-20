@@ -6,7 +6,7 @@
 function dbUuid(value: string, operator?: string): DBCast;
 ```
 
-Defined in: [DBValues.ts:519](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBValues.ts#L519)
+Defined in: [DBValues.ts:545](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBValues.ts#L545)
 
 Create a type-cast UUID value
 

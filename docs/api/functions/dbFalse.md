@@ -6,7 +6,7 @@
 function dbFalse(): DBBoolValue;
 ```
 
-Defined in: [DBValues.ts:359](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBValues.ts#L359)
+Defined in: [DBValues.ts:385](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBValues.ts#L385)
 
 Create a boolean FALSE value
 

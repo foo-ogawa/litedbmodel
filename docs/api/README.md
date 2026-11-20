@@ -1,7 +1,7 @@
 # litedbmodel API Reference
 
 <!--@embedoc:package_version-->
-**Version:** litedbmodel **2.3.0**
+**Version:** litedbmodel **2.3.1**
 <!--@embedoc:end-->
 
 The public API of the `litedbmodel` package, generated from the sources by `npm run docs`. For how to
@@ -78,7 +78,7 @@ use it, start with the [API Guide](../api-guide.md).
 type WriteValue<V> = V | (V extends string ? Date | bigint : never);
 ```
 
-Defined in: [Column.ts:780](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L780)
+Defined in: [Column.ts:781](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L781)
 
 What a column ACCEPTS on write, given the type it READS BACK.
 
@@ -103,7 +103,7 @@ from a plain text one — all of them read `string` — so the widening applies 
 type SkipType = typeof SKIP;
 ```
 
-Defined in: [Column.ts:805](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L805)
+Defined in: [Column.ts:806](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L806)
 
 ***
 
@@ -245,7 +245,7 @@ reports the migration instead (see `requireColumnFamily`).
 const SKIP: typeof SKIP;
 ```
 
-Defined in: [Column.ts:804](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L804)
+Defined in: [Column.ts:805](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L805)
 
 Sentinel value to skip a field in create/update operations.
 Use with conditional expressions to keep code as expressions instead of statements.

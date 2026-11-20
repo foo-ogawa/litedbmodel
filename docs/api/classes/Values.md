@@ -2,7 +2,7 @@
 
 # Class: Values\<Model\>
 
-Defined in: [Column.ts:577](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L577)
+Defined in: [Column.ts:578](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L578)
 
 Type-safe builder for update/create value pairs.
 Use array literals for static values, builder for dynamic construction.
@@ -44,7 +44,7 @@ await User.create(values.build());
 new Values(initial?: readonly (readonly [Column<any, Model>, unknown])[]): Values<Model>;
 ```
 
-Defined in: [Column.ts:583](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L583)
+Defined in: [Column.ts:584](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L584)
 
 Create a Values builder, optionally with initial pairs.
 
@@ -62,7 +62,7 @@ Create a Values builder, optionally with initial pairs.
 get length(): number;
 ```
 
-Defined in: [Column.ts:607](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L607)
+Defined in: [Column.ts:608](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L608)
 
 Get the number of pairs.
 
@@ -78,7 +78,7 @@ Get the number of pairs.
 add<V>(column: Column<V, Model>, value: V | null | undefined): this;
 ```
 
-Defined in: [Column.ts:592](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L592)
+Defined in: [Column.ts:593](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L593)
 
 Add a type-safe column-value pair.
 
@@ -107,7 +107,7 @@ Add a type-safe column-value pair.
 build(): readonly (readonly [Column<any, any>, unknown])[];
 ```
 
-Defined in: [Column.ts:600](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L600)
+Defined in: [Column.ts:601](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L601)
 
 Build the final array for use with update/create.
 

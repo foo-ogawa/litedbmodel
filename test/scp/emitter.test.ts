@@ -111,7 +111,7 @@ describe('emitter — READ', () => {
   it('#98 — a QUERY view reads from the derived CTE, its own params bound FIRST', () => {
     const line = bodyOf(emit('sqlite').source, 'postsOfAuthorView')[0];
     expect(line).toContain('WITH derived AS (SELECT id, title FROM e2e_posts WHERE author_id = ?) SELECT id, title FROM derived ORDER BY id ASC');
-    expect(line).toContain('[1]'); // the fragment's own literal param rides the CTE slot
+    expect(line).toContain('[1 as Int]'); // the fragment's own literal param rides the CTE slot (an integer constant is an `Int`)
   });
 });
 
