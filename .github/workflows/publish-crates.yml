@@ -34,10 +34,16 @@ env:
 
 jobs:
   publish:
+    # The workflow_run trigger matches a workflow by NAME and a branch by NAME only, so the run is checked
+    # to be release.yml of THIS repository, started by a push to main (or its dispatch), before a
+    # publish.
     if: >-
       github.event_name == 'release' ||
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+       (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch') &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.path == '.github/workflows/release.yml')
     runs-on: ubuntu-latest
     environment: release
     defaults:
