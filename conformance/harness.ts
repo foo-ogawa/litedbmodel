@@ -188,6 +188,7 @@ class ConfUser {
 class ConfPost {
   declare static id: Column<number, ConfPost>;
   declare static author_id: Column<number, ConfPost>;
+  declare static status: Column<string, ConfPost>;
 
   // The schema is `id INT PRIMARY KEY` — CLIENT-supplied, no AUTO_INCREMENT. Declaring it is what
   // lets a `… RETURNING` write recover its rows by the value it bound (#130).
