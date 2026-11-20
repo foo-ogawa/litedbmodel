@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "litedbmodel-runtime"
-version = "2.3.0"
+version = "2.3.1"
 description = "litedbmodel v2 SCP Python runtime: the op-agnostic leaf transports, execution context, drivers and relation grouping that the bc python-native modules call."
 readme = "README.md"
 requires-python = ">=3.9"

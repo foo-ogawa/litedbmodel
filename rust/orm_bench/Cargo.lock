@@ -895,7 +895,7 @@ dependencies = [
 
 [[package]]
 name = "litedbmodel_runtime"
-version = "2.3.0"
+version = "2.3.1"
 dependencies = [
  "behavior-contracts",
  "chrono",

@@ -102,7 +102,7 @@ from .connection_routing import (
 )
 from .leaves import execute_sql, group_children, pluck_keys, render_placeholders, with_leaf_transport
 
-__version__ = "2.3.0"
+__version__ = "2.3.1"
 
 __all__ = [
     "__version__",
