@@ -301,6 +301,68 @@ pub struct PostsWithAuthorRow_author {
 #[rustfmt::skip]
 #[derive(Clone, Default)]
 #[allow(dead_code)]
+pub struct NotesRow {
+    pub archived: Option<i64>, // "archived"
+    pub author_id: Option<i64>, // "author_id"
+    pub body: Option<String>, // "body"
+    pub id: Option<i64>, // "id"
+}
+
+#[rustfmt::skip]
+#[derive(Clone, Default)]
+#[allow(dead_code)]
+pub struct NotesByAuthorRow {
+    pub archived: Option<i64>, // "archived"
+    pub author_id: Option<i64>, // "author_id"
+    pub body: Option<String>, // "body"
+    pub id: Option<i64>, // "id"
+}
+
+#[rustfmt::skip]
+#[derive(Clone, Default)]
+#[allow(dead_code)]
+pub struct UsersWithFilteredRelationsRow {
+    pub id: Option<i64>, // "id"
+    pub latestNote: Vec<UsersWithFilteredRelationsRow_latestNote>, // "latestNote"
+    pub livePosts: Vec<UsersWithFilteredRelationsRow_livePosts>, // "livePosts"
+    pub name: Option<String>, // "name"
+    pub notes: Vec<UsersWithFilteredRelationsRow_notes>, // "notes"
+}
+
+#[rustfmt::skip]
+#[derive(Clone, Default)]
+#[allow(dead_code)]
+pub struct UsersWithFilteredRelationsRow_latestNote {
+    pub archived: Option<i64>, // "archived"
+    pub author_id: Option<i64>, // "author_id"
+    pub body: Option<String>, // "body"
+    pub id: Option<i64>, // "id"
+}
+
+#[rustfmt::skip]
+#[derive(Clone, Default)]
+#[allow(dead_code)]
+pub struct UsersWithFilteredRelationsRow_livePosts {
+    pub author_id: Option<i64>, // "author_id"
+    pub created_at: Option<String>, // "created_at"
+    pub id: Option<i64>, // "id"
+    pub status: Option<String>, // "status"
+    pub title: Option<String>, // "title"
+}
+
+#[rustfmt::skip]
+#[derive(Clone, Default)]
+#[allow(dead_code)]
+pub struct UsersWithFilteredRelationsRow_notes {
+    pub archived: Option<i64>, // "archived"
+    pub author_id: Option<i64>, // "author_id"
+    pub body: Option<String>, // "body"
+    pub id: Option<i64>, // "id"
+}
+
+#[rustfmt::skip]
+#[derive(Clone, Default)]
+#[allow(dead_code)]
 pub struct UsersWithCappedPostsRow {
     pub cappedPosts: Vec<UsersWithCappedPostsRow_cappedPosts>, // "cappedPosts"
     pub id: Option<i64>, // "id"
@@ -481,6 +543,14 @@ pub struct RelabelTagsReturningRecord {
 pub struct RemoveTagsReturningRow {
     pub id: Option<i64>, // "id"
     pub label: Option<String>, // "label"
+}
+
+#[rustfmt::skip]
+#[derive(Clone, Default)]
+#[allow(dead_code)]
+pub struct RenameNotesRecord {
+    pub body: String, // "body"
+    pub id: i64, // "id"
 }
 
 #[allow(dead_code)]
@@ -1568,6 +1638,485 @@ pub fn postsWithAuthor(
         produced_n3.set(true);
     }
     let __out = cell_n3.take();
+    Ok(__out)
+}
+
+#[rustfmt::skip]
+// notes — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
+// de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
+// TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
+// de-boxes the returned wire INLINE (match wire.as_*() { … } fully unrolled — no decode helper) into
+// the node's outType struct cell — no boxed handler result, no generic enum crossing, no dispatch on a dynamic value on the covered plane. Node
+// results are typed struct cells; a relation child reads the parent's REAL struct result via
+// direct field access (child-present decision from the real parent value — relation /
+// connection converge). A real-concurrency stage (bc#87) is static parallel orchestration —
+// scoped worker threads (bounded by the static plan.concurrency) call the transport; preflight +
+// interpret are committed in ascending index order so the value / op multiset / failure
+// precedence byte-match run_behavior. The output is a typed struct/value assembled by struct
+// literal + field access — the consumer keeps it native.
+pub fn notes(
+) -> Result<Vec<NotesRow>, BehaviorError> {
+    let cell_n0: RefCell<Vec<NotesRow>> = RefCell::new(Default::default());
+    let produced_n0 = std::cell::Cell::new(false);
+    let _ = &produced_n0;
+    // ── op 'n0' (executeSQL) ──
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Int(0i64)]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, author_id, body, archived FROM conf_notes WHERE (archived = ?) ORDER BY id ASC")))] };
+    let wire_n0 = match execute_sql(payload_n0) {
+        Ok(r) => r,
+        Err(e) => return Err(op_failed("n0", "fail", e)),
+    };
+    *cell_n0.borrow_mut() = match probe_list_at(Some(wire_n0)) {
+        Probe::Got(l0) => {
+            let mut at1 = [0usize; 4];
+            let mut acc0 = Vec::with_capacity(l0.items.len());
+            for e0 in l0.items {
+                acc0.push(match probe_row_at(Some(e0)) {
+                    Probe::Got(mut sub1) => NotesRow {
+                        archived: match probe_int_at(sub1.take_at("archived", &mut at1[0])) {
+                            Probe::Got(v) => Some(v),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("NotesRow", "archived", "opt(int)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        author_id: match probe_int_at(sub1.take_at("author_id", &mut at1[1])) {
+                            Probe::Got(v) => Some(v),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("NotesRow", "author_id", "opt(int)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        body: match probe_string_at(sub1.take_at("body", &mut at1[2])) {
+                            Probe::Got(v) => Some(v.into_owned()),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("NotesRow", "body", "opt(string)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        id: match probe_int_at(sub1.take_at("id", &mut at1[3])) {
+                            Probe::Got(v) => Some(v),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("NotesRow", "id", "opt(int)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                    },
+                    Probe::Wrong { actual_wire_type, raw_value }
+                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}", actual_wire_type, raw_value)),
+                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}")),
+                });
+            }
+            acc0
+        },
+        Probe::Wrong { actual_wire_type, raw_value }
+        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})", actual_wire_type, raw_value)),
+        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})")),
+    };
+    produced_n0.set(true);
+    let __out = cell_n0.take();
+    Ok(__out)
+}
+
+#[rustfmt::skip]
+// notesByAuthor — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
+// de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
+// TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
+// de-boxes the returned wire INLINE (match wire.as_*() { … } fully unrolled — no decode helper) into
+// the node's outType struct cell — no boxed handler result, no generic enum crossing, no dispatch on a dynamic value on the covered plane. Node
+// results are typed struct cells; a relation child reads the parent's REAL struct result via
+// direct field access (child-present decision from the real parent value — relation /
+// connection converge). A real-concurrency stage (bc#87) is static parallel orchestration —
+// scoped worker threads (bounded by the static plan.concurrency) call the transport; preflight +
+// interpret are committed in ascending index order so the value / op multiset / failure
+// precedence byte-match run_behavior. The output is a typed struct/value assembled by struct
+// literal + field access — the consumer keeps it native.
+pub fn notesByAuthor(
+    authorId: i64,
+) -> Result<Vec<NotesByAuthorRow>, BehaviorError> {
+    let cell_n0: RefCell<Vec<NotesByAuthorRow>> = RefCell::new(Default::default());
+    let produced_n0 = std::cell::Cell::new(false);
+    let _ = &produced_n0;
+    // ── op 'n0' (executeSQL) ──
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Int(authorId), WireValue::Int(0i64)]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, author_id, body, archived FROM conf_notes WHERE author_id = ? AND (archived = ?) ORDER BY id ASC")))] };
+    let wire_n0 = match execute_sql(payload_n0) {
+        Ok(r) => r,
+        Err(e) => return Err(op_failed("n0", "fail", e)),
+    };
+    *cell_n0.borrow_mut() = match probe_list_at(Some(wire_n0)) {
+        Probe::Got(l0) => {
+            let mut at1 = [0usize; 4];
+            let mut acc0 = Vec::with_capacity(l0.items.len());
+            for e0 in l0.items {
+                acc0.push(match probe_row_at(Some(e0)) {
+                    Probe::Got(mut sub1) => NotesByAuthorRow {
+                        archived: match probe_int_at(sub1.take_at("archived", &mut at1[0])) {
+                            Probe::Got(v) => Some(v),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("NotesByAuthorRow", "archived", "opt(int)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        author_id: match probe_int_at(sub1.take_at("author_id", &mut at1[1])) {
+                            Probe::Got(v) => Some(v),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("NotesByAuthorRow", "author_id", "opt(int)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        body: match probe_string_at(sub1.take_at("body", &mut at1[2])) {
+                            Probe::Got(v) => Some(v.into_owned()),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("NotesByAuthorRow", "body", "opt(string)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                        id: match probe_int_at(sub1.take_at("id", &mut at1[3])) {
+                            Probe::Got(v) => Some(v),
+                            Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("NotesByAuthorRow", "id", "opt(int)", actual_wire_type, raw_value)),
+                            Probe::Null { .. } | Probe::Absent => None,
+                        },
+                    },
+                    Probe::Wrong { actual_wire_type, raw_value }
+                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}", actual_wire_type, raw_value)),
+                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}")),
+                });
+            }
+            acc0
+        },
+        Probe::Wrong { actual_wire_type, raw_value }
+        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})", actual_wire_type, raw_value)),
+        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})")),
+    };
+    produced_n0.set(true);
+    let __out = cell_n0.take();
+    Ok(__out)
+}
+
+#[rustfmt::skip]
+// usersWithFilteredRelations — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
+// de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
+// TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
+// de-boxes the returned wire INLINE (match wire.as_*() { … } fully unrolled — no decode helper) into
+// the node's outType struct cell — no boxed handler result, no generic enum crossing, no dispatch on a dynamic value on the covered plane. Node
+// results are typed struct cells; a relation child reads the parent's REAL struct result via
+// direct field access (child-present decision from the real parent value — relation /
+// connection converge). A real-concurrency stage (bc#87) is static parallel orchestration —
+// scoped worker threads (bounded by the static plan.concurrency) call the transport; preflight +
+// interpret are committed in ascending index order so the value / op multiset / failure
+// precedence byte-match run_behavior. The output is a typed struct/value assembled by struct
+// literal + field access — the consumer keeps it native.
+pub fn usersWithFilteredRelations(
+) -> Result<Vec<UsersWithFilteredRelationsRow>, BehaviorError> {
+    let cell_n0: RefCell<Vec<WireValue>> = RefCell::new(Default::default());
+    let produced_n0 = std::cell::Cell::new(false);
+    let _ = &produced_n0;
+    let cell_n1: RefCell<Vec<WireValue>> = RefCell::new(Default::default());
+    let produced_n1 = std::cell::Cell::new(false);
+    let _ = &produced_n1;
+    let cell_n2: RefCell<Vec<WireValue>> = RefCell::new(Default::default());
+    let produced_n2 = std::cell::Cell::new(false);
+    let _ = &produced_n2;
+    let cell_n3: RefCell<Vec<WireValue>> = RefCell::new(Default::default());
+    let produced_n3 = std::cell::Cell::new(false);
+    let _ = &produced_n3;
+    let cell_n4: RefCell<Vec<WireValue>> = RefCell::new(Default::default());
+    let produced_n4 = std::cell::Cell::new(false);
+    let _ = &produced_n4;
+    let cell_n5: RefCell<Vec<WireValue>> = RefCell::new(Default::default());
+    let produced_n5 = std::cell::Cell::new(false);
+    let _ = &produced_n5;
+    let cell_n6: RefCell<Vec<WireValue>> = RefCell::new(Default::default());
+    let produced_n6 = std::cell::Cell::new(false);
+    let _ = &produced_n6;
+    let cell_n7: RefCell<Vec<WireValue>> = RefCell::new(Default::default());
+    let produced_n7 = std::cell::Cell::new(false);
+    let _ = &produced_n7;
+    let cell_n8: RefCell<Vec<WireValue>> = RefCell::new(Default::default());
+    let produced_n8 = std::cell::Cell::new(false);
+    let _ = &produced_n8;
+    let cell_n9: RefCell<Vec<UsersWithFilteredRelationsRow>> = RefCell::new(Default::default());
+    let produced_n9 = std::cell::Cell::new(false);
+    let _ = &produced_n9;
+    // ── op 'n0' (executeSQL) ──
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, name FROM conf_users ORDER BY id ASC")))] };
+    let wire_n0 = match execute_sql(payload_n0) {
+        Ok(r) => r,
+        Err(e) => return Err(op_failed("n0", "fail", e)),
+    };
+    *cell_n0.borrow_mut() = match probe_list_at(Some(wire_n0)) {
+        Probe::Got(l0) => l0.items,
+        Probe::Wrong { actual_wire_type, raw_value }
+        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(value)", actual_wire_type, raw_value)),
+        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(value)")),
+    };
+    produced_n0.set(true);
+    // ── op 'n1' (pluck, parent:n0) ──
+    if produced_n0.get() {
+        let payload_n1 = WireRow { entries: vec![(Cow::Borrowed("col"), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["id".to_string()]; __v }.into_iter().map(|e0| WireValue::Str(e0.into())).collect() })), (Cow::Borrowed("rows"), WireValue::List(WireList { items: cell_n0.borrow().clone() }))] };
+        let wire_n1 = match pluck_keys(payload_n1) {
+            Ok(r) => r,
+            Err(e) => return Err(op_failed("n1", "fail", e)),
+        };
+        *cell_n1.borrow_mut() = match probe_list_at(Some(wire_n1)) {
+            Probe::Got(l0) => l0.items,
+            Probe::Wrong { actual_wire_type, raw_value }
+            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n1", "n1", "arr(value)", actual_wire_type, raw_value)),
+            Probe::Absent => return Err(de_missing_field("n1", "n1", "arr(value)")),
+        };
+        produced_n1.set(true);
+    }
+    // ── op 'n2' (executeSQL, parent:n1) ──
+    if produced_n1.get() {
+        let payload_n2 = WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n1.take() }), WireValue::Str(Cow::Borrowed("live"))]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, author_id, title, status, created_at FROM conf_posts WHERE author_id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt) AND status = ? ORDER BY id ASC")))] };
+        let wire_n2 = match execute_sql(payload_n2) {
+            Ok(r) => r,
+            Err(e) => return Err(op_failed("n2", "fail", e)),
+        };
+        *cell_n2.borrow_mut() = match probe_list_at(Some(wire_n2)) {
+            Probe::Got(l0) => l0.items,
+            Probe::Wrong { actual_wire_type, raw_value }
+            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n2", "n2", "arr(value)", actual_wire_type, raw_value)),
+            Probe::Absent => return Err(de_missing_field("n2", "n2", "arr(value)")),
+        };
+        produced_n2.set(true);
+    }
+    // ── op 'n3' (group, parent:n0) ──
+    if produced_n0.get() {
+        let payload_n3 = WireRow { entries: vec![(Cow::Borrowed("children"), WireValue::List(WireList { items: cell_n2.take() })), (Cow::Borrowed("fk"), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["author_id".to_string()]; __v }.into_iter().map(|e0| WireValue::Str(e0.into())).collect() })), (Cow::Borrowed("into"), WireValue::Str(Cow::Borrowed("livePosts"))), (Cow::Borrowed("parents"), WireValue::List(WireList { items: cell_n0.take() })), (Cow::Borrowed("pk"), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["id".to_string()]; __v }.into_iter().map(|e0| WireValue::Str(e0.into())).collect() })), (Cow::Borrowed("single"), WireValue::Bool(false))] };
+        let wire_n3 = match group_children(payload_n3) {
+            Ok(r) => r,
+            Err(e) => return Err(op_failed("n3", "fail", e)),
+        };
+        *cell_n3.borrow_mut() = match probe_list_at(Some(wire_n3)) {
+            Probe::Got(l0) => l0.items,
+            Probe::Wrong { actual_wire_type, raw_value }
+            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n3", "n3", "arr(value)", actual_wire_type, raw_value)),
+            Probe::Absent => return Err(de_missing_field("n3", "n3", "arr(value)")),
+        };
+        produced_n3.set(true);
+    }
+    // ── op 'n4' (pluck, parent:n3) ──
+    if produced_n3.get() {
+        let payload_n4 = WireRow { entries: vec![(Cow::Borrowed("col"), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["id".to_string()]; __v }.into_iter().map(|e0| WireValue::Str(e0.into())).collect() })), (Cow::Borrowed("rows"), WireValue::List(WireList { items: cell_n3.borrow().clone() }))] };
+        let wire_n4 = match pluck_keys(payload_n4) {
+            Ok(r) => r,
+            Err(e) => return Err(op_failed("n4", "fail", e)),
+        };
+        *cell_n4.borrow_mut() = match probe_list_at(Some(wire_n4)) {
+            Probe::Got(l0) => l0.items,
+            Probe::Wrong { actual_wire_type, raw_value }
+            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n4", "n4", "arr(value)", actual_wire_type, raw_value)),
+            Probe::Absent => return Err(de_missing_field("n4", "n4", "arr(value)")),
+        };
+        produced_n4.set(true);
+    }
+    // ── op 'n5' (executeSQL, parent:n4) ──
+    if produced_n4.get() {
+        let payload_n5 = WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n4.take() }), WireValue::Int(0i64)]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("SELECT id, author_id, body, archived FROM conf_notes WHERE author_id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt) AND (archived = ?) ORDER BY id ASC")))] };
+        let wire_n5 = match execute_sql(payload_n5) {
+            Ok(r) => r,
+            Err(e) => return Err(op_failed("n5", "fail", e)),
+        };
+        *cell_n5.borrow_mut() = match probe_list_at(Some(wire_n5)) {
+            Probe::Got(l0) => l0.items,
+            Probe::Wrong { actual_wire_type, raw_value }
+            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n5", "n5", "arr(value)", actual_wire_type, raw_value)),
+            Probe::Absent => return Err(de_missing_field("n5", "n5", "arr(value)")),
+        };
+        produced_n5.set(true);
+    }
+    // ── op 'n6' (group, parent:n3) ──
+    if produced_n3.get() {
+        let payload_n6 = WireRow { entries: vec![(Cow::Borrowed("children"), WireValue::List(WireList { items: cell_n5.take() })), (Cow::Borrowed("fk"), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["author_id".to_string()]; __v }.into_iter().map(|e0| WireValue::Str(e0.into())).collect() })), (Cow::Borrowed("into"), WireValue::Str(Cow::Borrowed("notes"))), (Cow::Borrowed("parents"), WireValue::List(WireList { items: cell_n3.take() })), (Cow::Borrowed("pk"), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["id".to_string()]; __v }.into_iter().map(|e0| WireValue::Str(e0.into())).collect() })), (Cow::Borrowed("single"), WireValue::Bool(false))] };
+        let wire_n6 = match group_children(payload_n6) {
+            Ok(r) => r,
+            Err(e) => return Err(op_failed("n6", "fail", e)),
+        };
+        *cell_n6.borrow_mut() = match probe_list_at(Some(wire_n6)) {
+            Probe::Got(l0) => l0.items,
+            Probe::Wrong { actual_wire_type, raw_value }
+            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n6", "n6", "arr(value)", actual_wire_type, raw_value)),
+            Probe::Absent => return Err(de_missing_field("n6", "n6", "arr(value)")),
+        };
+        produced_n6.set(true);
+    }
+    // ── op 'n7' (pluck, parent:n6) ──
+    if produced_n6.get() {
+        let payload_n7 = WireRow { entries: vec![(Cow::Borrowed("col"), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["id".to_string()]; __v }.into_iter().map(|e0| WireValue::Str(e0.into())).collect() })), (Cow::Borrowed("rows"), WireValue::List(WireList { items: cell_n6.borrow().clone() }))] };
+        let wire_n7 = match pluck_keys(payload_n7) {
+            Ok(r) => r,
+            Err(e) => return Err(op_failed("n7", "fail", e)),
+        };
+        *cell_n7.borrow_mut() = match probe_list_at(Some(wire_n7)) {
+            Probe::Got(l0) => l0.items,
+            Probe::Wrong { actual_wire_type, raw_value }
+            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n7", "n7", "arr(value)", actual_wire_type, raw_value)),
+            Probe::Absent => return Err(de_missing_field("n7", "n7", "arr(value)")),
+        };
+        produced_n7.set(true);
+    }
+    // ── op 'n8' (executeSQL, parent:n7) ──
+    if produced_n7.get() {
+        let payload_n8 = WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: cell_n7.take() }), WireValue::Int(0i64)]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("WITH ranked AS (SELECT *, ROW_NUMBER() OVER (PARTITION BY author_id ORDER BY id DESC) AS _rn FROM conf_notes WHERE author_id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt) AND (archived = ?)) SELECT * FROM ranked WHERE _rn <= 1")))] };
+        let wire_n8 = match execute_sql(payload_n8) {
+            Ok(r) => r,
+            Err(e) => return Err(op_failed("n8", "fail", e)),
+        };
+        *cell_n8.borrow_mut() = match probe_list_at(Some(wire_n8)) {
+            Probe::Got(l0) => l0.items,
+            Probe::Wrong { actual_wire_type, raw_value }
+            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n8", "n8", "arr(value)", actual_wire_type, raw_value)),
+            Probe::Absent => return Err(de_missing_field("n8", "n8", "arr(value)")),
+        };
+        produced_n8.set(true);
+    }
+    // ── op 'n9' (group, parent:n6) ──
+    if produced_n6.get() {
+        let payload_n9 = WireRow { entries: vec![(Cow::Borrowed("children"), WireValue::List(WireList { items: cell_n8.take() })), (Cow::Borrowed("fk"), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["author_id".to_string()]; __v }.into_iter().map(|e0| WireValue::Str(e0.into())).collect() })), (Cow::Borrowed("into"), WireValue::Str(Cow::Borrowed("latestNote"))), (Cow::Borrowed("parents"), WireValue::List(WireList { items: cell_n6.take() })), (Cow::Borrowed("pk"), WireValue::List(WireList { items: { let __v: Vec<String> = vec!["id".to_string()]; __v }.into_iter().map(|e0| WireValue::Str(e0.into())).collect() })), (Cow::Borrowed("single"), WireValue::Bool(false))] };
+        let wire_n9 = match group_children(payload_n9) {
+            Ok(r) => r,
+            Err(e) => return Err(op_failed("n9", "fail", e)),
+        };
+        *cell_n9.borrow_mut() = match probe_list_at(Some(wire_n9)) {
+            Probe::Got(l0) => {
+                let mut at1 = [0usize; 5];
+                let mut at4 = [0usize; 4];
+                let mut at10 = [0usize; 5];
+                let mut at18 = [0usize; 4];
+                let mut acc0 = Vec::with_capacity(l0.items.len());
+                for e0 in l0.items {
+                    acc0.push(match probe_row_at(Some(e0)) {
+                        Probe::Got(mut sub1) => UsersWithFilteredRelationsRow {
+                            id: match probe_int_at(sub1.take_at("id", &mut at1[0])) {
+                                Probe::Got(v) => Some(v),
+                                Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("UsersWithFilteredRelationsRow", "id", "opt(int)", actual_wire_type, raw_value)),
+                                Probe::Null { .. } | Probe::Absent => None,
+                            },
+                            latestNote: match probe_list_at(sub1.take_at("latestNote", &mut at1[1])) {
+                                Probe::Got(l3) => {
+                                    let mut acc3 = Vec::with_capacity(l3.items.len());
+                                    for e3 in l3.items {
+                                        acc3.push(match probe_row_at(Some(e3)) {
+                                            Probe::Got(mut sub4) => UsersWithFilteredRelationsRow_latestNote {
+                                                archived: match probe_int_at(sub4.take_at("archived", &mut at4[0])) {
+                                                    Probe::Got(v) => Some(v),
+                                                    Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("UsersWithFilteredRelationsRow_latestNote", "archived", "opt(int)", actual_wire_type, raw_value)),
+                                                    Probe::Null { .. } | Probe::Absent => None,
+                                                },
+                                                author_id: match probe_int_at(sub4.take_at("author_id", &mut at4[1])) {
+                                                    Probe::Got(v) => Some(v),
+                                                    Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("UsersWithFilteredRelationsRow_latestNote", "author_id", "opt(int)", actual_wire_type, raw_value)),
+                                                    Probe::Null { .. } | Probe::Absent => None,
+                                                },
+                                                body: match probe_string_at(sub4.take_at("body", &mut at4[2])) {
+                                                    Probe::Got(v) => Some(v.into_owned()),
+                                                    Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("UsersWithFilteredRelationsRow_latestNote", "body", "opt(string)", actual_wire_type, raw_value)),
+                                                    Probe::Null { .. } | Probe::Absent => None,
+                                                },
+                                                id: match probe_int_at(sub4.take_at("id", &mut at4[3])) {
+                                                    Probe::Got(v) => Some(v),
+                                                    Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("UsersWithFilteredRelationsRow_latestNote", "id", "opt(int)", actual_wire_type, raw_value)),
+                                                    Probe::Null { .. } | Probe::Absent => None,
+                                                },
+                                            },
+                                            Probe::Wrong { actual_wire_type, raw_value }
+                                            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UsersWithFilteredRelationsRow", "latestNote", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}", actual_wire_type, raw_value)),
+                                            Probe::Absent => return Err(de_missing_field("UsersWithFilteredRelationsRow", "latestNote", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}")),
+                                        });
+                                    }
+                                    acc3
+                                },
+                                Probe::Wrong { actual_wire_type, raw_value }
+                                | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UsersWithFilteredRelationsRow", "latestNote", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})", actual_wire_type, raw_value)),
+                                Probe::Absent => return Err(de_missing_field("UsersWithFilteredRelationsRow", "latestNote", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})")),
+                            },
+                            livePosts: match probe_list_at(sub1.take_at("livePosts", &mut at1[2])) {
+                                Probe::Got(l9) => {
+                                    let mut acc9 = Vec::with_capacity(l9.items.len());
+                                    for e9 in l9.items {
+                                        acc9.push(match probe_row_at(Some(e9)) {
+                                            Probe::Got(mut sub10) => UsersWithFilteredRelationsRow_livePosts {
+                                                author_id: match probe_int_at(sub10.take_at("author_id", &mut at10[0])) {
+                                                    Probe::Got(v) => Some(v),
+                                                    Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("UsersWithFilteredRelationsRow_livePosts", "author_id", "opt(int)", actual_wire_type, raw_value)),
+                                                    Probe::Null { .. } | Probe::Absent => None,
+                                                },
+                                                created_at: match probe_string_at(sub10.take_at("created_at", &mut at10[1])) {
+                                                    Probe::Got(v) => Some(v.into_owned()),
+                                                    Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("UsersWithFilteredRelationsRow_livePosts", "created_at", "opt(string)", actual_wire_type, raw_value)),
+                                                    Probe::Null { .. } | Probe::Absent => None,
+                                                },
+                                                id: match probe_int_at(sub10.take_at("id", &mut at10[2])) {
+                                                    Probe::Got(v) => Some(v),
+                                                    Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("UsersWithFilteredRelationsRow_livePosts", "id", "opt(int)", actual_wire_type, raw_value)),
+                                                    Probe::Null { .. } | Probe::Absent => None,
+                                                },
+                                                status: match probe_string_at(sub10.take_at("status", &mut at10[3])) {
+                                                    Probe::Got(v) => Some(v.into_owned()),
+                                                    Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("UsersWithFilteredRelationsRow_livePosts", "status", "opt(string)", actual_wire_type, raw_value)),
+                                                    Probe::Null { .. } | Probe::Absent => None,
+                                                },
+                                                title: match probe_string_at(sub10.take_at("title", &mut at10[4])) {
+                                                    Probe::Got(v) => Some(v.into_owned()),
+                                                    Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("UsersWithFilteredRelationsRow_livePosts", "title", "opt(string)", actual_wire_type, raw_value)),
+                                                    Probe::Null { .. } | Probe::Absent => None,
+                                                },
+                                            },
+                                            Probe::Wrong { actual_wire_type, raw_value }
+                                            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UsersWithFilteredRelationsRow", "livePosts", "obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}", actual_wire_type, raw_value)),
+                                            Probe::Absent => return Err(de_missing_field("UsersWithFilteredRelationsRow", "livePosts", "obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}")),
+                                        });
+                                    }
+                                    acc9
+                                },
+                                Probe::Wrong { actual_wire_type, raw_value }
+                                | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UsersWithFilteredRelationsRow", "livePosts", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})", actual_wire_type, raw_value)),
+                                Probe::Absent => return Err(de_missing_field("UsersWithFilteredRelationsRow", "livePosts", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})")),
+                            },
+                            name: match probe_string_at(sub1.take_at("name", &mut at1[3])) {
+                                Probe::Got(v) => Some(v.into_owned()),
+                                Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("UsersWithFilteredRelationsRow", "name", "opt(string)", actual_wire_type, raw_value)),
+                                Probe::Null { .. } | Probe::Absent => None,
+                            },
+                            notes: match probe_list_at(sub1.take_at("notes", &mut at1[4])) {
+                                Probe::Got(l17) => {
+                                    let mut acc17 = Vec::with_capacity(l17.items.len());
+                                    for e17 in l17.items {
+                                        acc17.push(match probe_row_at(Some(e17)) {
+                                            Probe::Got(mut sub18) => UsersWithFilteredRelationsRow_notes {
+                                                archived: match probe_int_at(sub18.take_at("archived", &mut at18[0])) {
+                                                    Probe::Got(v) => Some(v),
+                                                    Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("UsersWithFilteredRelationsRow_notes", "archived", "opt(int)", actual_wire_type, raw_value)),
+                                                    Probe::Null { .. } | Probe::Absent => None,
+                                                },
+                                                author_id: match probe_int_at(sub18.take_at("author_id", &mut at18[1])) {
+                                                    Probe::Got(v) => Some(v),
+                                                    Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("UsersWithFilteredRelationsRow_notes", "author_id", "opt(int)", actual_wire_type, raw_value)),
+                                                    Probe::Null { .. } | Probe::Absent => None,
+                                                },
+                                                body: match probe_string_at(sub18.take_at("body", &mut at18[2])) {
+                                                    Probe::Got(v) => Some(v.into_owned()),
+                                                    Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("UsersWithFilteredRelationsRow_notes", "body", "opt(string)", actual_wire_type, raw_value)),
+                                                    Probe::Null { .. } | Probe::Absent => None,
+                                                },
+                                                id: match probe_int_at(sub18.take_at("id", &mut at18[3])) {
+                                                    Probe::Got(v) => Some(v),
+                                                    Probe::Wrong { actual_wire_type, raw_value } => return Err(de_type_mismatch("UsersWithFilteredRelationsRow_notes", "id", "opt(int)", actual_wire_type, raw_value)),
+                                                    Probe::Null { .. } | Probe::Absent => None,
+                                                },
+                                            },
+                                            Probe::Wrong { actual_wire_type, raw_value }
+                                            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UsersWithFilteredRelationsRow", "notes", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}", actual_wire_type, raw_value)),
+                                            Probe::Absent => return Err(de_missing_field("UsersWithFilteredRelationsRow", "notes", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}")),
+                                        });
+                                    }
+                                    acc17
+                                },
+                                Probe::Wrong { actual_wire_type, raw_value }
+                                | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("UsersWithFilteredRelationsRow", "notes", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})", actual_wire_type, raw_value)),
+                                Probe::Absent => return Err(de_missing_field("UsersWithFilteredRelationsRow", "notes", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})")),
+                            },
+                        },
+                        Probe::Wrong { actual_wire_type, raw_value }
+                        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n9", "n9", "obj{id:opt(int),latestNote:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}),livePosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}),name:opt(string),notes:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})}", actual_wire_type, raw_value)),
+                        Probe::Absent => return Err(de_missing_field("n9", "n9", "obj{id:opt(int),latestNote:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}),livePosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}),name:opt(string),notes:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})}")),
+                    });
+                }
+                acc0
+            },
+            Probe::Wrong { actual_wire_type, raw_value }
+            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n9", "n9", "arr(obj{id:opt(int),latestNote:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}),livePosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}),name:opt(string),notes:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})})", actual_wire_type, raw_value)),
+            Probe::Absent => return Err(de_missing_field("n9", "n9", "arr(obj{id:opt(int),latestNote:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}),livePosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}),name:opt(string),notes:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})})")),
+        };
+        produced_n9.set(true);
+    }
+    let __out = cell_n9.take();
     Ok(__out)
 }
 
@@ -3022,8 +3571,253 @@ pub fn removeTagsReturning(
 }
 
 #[rustfmt::skip]
+// renameNote — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
+// de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
+// TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
+// de-boxes the returned wire INLINE (match wire.as_*() { … } fully unrolled — no decode helper) into
+// the node's outType struct cell — no boxed handler result, no generic enum crossing, no dispatch on a dynamic value on the covered plane. Node
+// results are typed struct cells; a relation child reads the parent's REAL struct result via
+// direct field access (child-present decision from the real parent value — relation /
+// connection converge). A real-concurrency stage (bc#87) is static parallel orchestration —
+// scoped worker threads (bounded by the static plan.concurrency) call the transport; preflight +
+// interpret are committed in ascending index order so the value / op multiset / failure
+// precedence byte-match run_behavior. The output is a typed struct/value assembled by struct
+// literal + field access — the consumer keeps it native.
+pub fn renameNote(
+    body: String,
+    id: i64,
+) -> Result<Vec<WriteSummary>, BehaviorError> {
+    let cell_n0: RefCell<Vec<WriteSummary>> = RefCell::new(Default::default());
+    let produced_n0 = std::cell::Cell::new(false);
+    let _ = &produced_n0;
+    // ── op 'n0' (executeSQL) ──
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Option::<DynamicWherePlan>::None, write: Some(WriteMode { returning: false }) }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() })), (Cow::Borrowed("lead"), WireValue::Str(ov1.lead.into())), (Cow::Borrowed("tail"), WireValue::Str(ov1.tail.into())), (Cow::Borrowed("tailParams"), WireValue::List(WireList { items: ov1.tailParams }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Str(body.into()), WireValue::Int(id), WireValue::Int(0i64)]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("UPDATE conf_notes SET body = ? WHERE id = ? AND (archived = ?)")))] };
+    let wire_n0 = match execute_sql(payload_n0) {
+        Ok(r) => r,
+        Err(e) => return Err(op_failed("n0", "fail", e)),
+    };
+    *cell_n0.borrow_mut() = match probe_list_at(Some(wire_n0)) {
+        Probe::Got(l0) => {
+            let mut at1 = [0usize; 2];
+            let mut acc0 = Vec::with_capacity(l0.items.len());
+            for e0 in l0.items {
+                acc0.push(match probe_row_at(Some(e0)) {
+                    Probe::Got(mut sub1) => WriteSummary {
+                        changes: match probe_int_at(sub1.take_at("changes", &mut at1[0])) {
+                            Probe::Got(v) => v,
+                            Probe::Wrong { actual_wire_type, raw_value }
+                            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("WriteSummary", "changes", "int", actual_wire_type, raw_value)),
+                            Probe::Absent => return Err(de_missing_field("WriteSummary", "changes", "int")),
+                        },
+                        lastInsertRowid: match probe_int_at(sub1.take_at("lastInsertRowid", &mut at1[1])) {
+                            Probe::Got(v) => v,
+                            Probe::Wrong { actual_wire_type, raw_value }
+                            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("WriteSummary", "lastInsertRowid", "int", actual_wire_type, raw_value)),
+                            Probe::Absent => return Err(de_missing_field("WriteSummary", "lastInsertRowid", "int")),
+                        },
+                    },
+                    Probe::Wrong { actual_wire_type, raw_value }
+                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", actual_wire_type, raw_value)),
+                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{changes:int,lastInsertRowid:int}")),
+                });
+            }
+            acc0
+        },
+        Probe::Wrong { actual_wire_type, raw_value }
+        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", actual_wire_type, raw_value)),
+        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})")),
+    };
+    produced_n0.set(true);
+    let __out = cell_n0.take();
+    Ok(__out)
+}
+
+#[rustfmt::skip]
+// removeNote — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
+// de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
+// TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
+// de-boxes the returned wire INLINE (match wire.as_*() { … } fully unrolled — no decode helper) into
+// the node's outType struct cell — no boxed handler result, no generic enum crossing, no dispatch on a dynamic value on the covered plane. Node
+// results are typed struct cells; a relation child reads the parent's REAL struct result via
+// direct field access (child-present decision from the real parent value — relation /
+// connection converge). A real-concurrency stage (bc#87) is static parallel orchestration —
+// scoped worker threads (bounded by the static plan.concurrency) call the transport; preflight +
+// interpret are committed in ascending index order so the value / op multiset / failure
+// precedence byte-match run_behavior. The output is a typed struct/value assembled by struct
+// literal + field access — the consumer keeps it native.
+pub fn removeNote(
+    id: i64,
+) -> Result<Vec<WriteSummary>, BehaviorError> {
+    let cell_n0: RefCell<Vec<WriteSummary>> = RefCell::new(Default::default());
+    let produced_n0 = std::cell::Cell::new(false);
+    let _ = &produced_n0;
+    // ── op 'n0' (executeSQL) ──
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Option::<DynamicWherePlan>::None, write: Some(WriteMode { returning: false }) }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() })), (Cow::Borrowed("lead"), WireValue::Str(ov1.lead.into())), (Cow::Borrowed("tail"), WireValue::Str(ov1.tail.into())), (Cow::Borrowed("tailParams"), WireValue::List(WireList { items: ov1.tailParams }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::Int(id), WireValue::Int(0i64)]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("DELETE FROM conf_notes WHERE id = ? AND (archived = ?)")))] };
+    let wire_n0 = match execute_sql(payload_n0) {
+        Ok(r) => r,
+        Err(e) => return Err(op_failed("n0", "fail", e)),
+    };
+    *cell_n0.borrow_mut() = match probe_list_at(Some(wire_n0)) {
+        Probe::Got(l0) => {
+            let mut at1 = [0usize; 2];
+            let mut acc0 = Vec::with_capacity(l0.items.len());
+            for e0 in l0.items {
+                acc0.push(match probe_row_at(Some(e0)) {
+                    Probe::Got(mut sub1) => WriteSummary {
+                        changes: match probe_int_at(sub1.take_at("changes", &mut at1[0])) {
+                            Probe::Got(v) => v,
+                            Probe::Wrong { actual_wire_type, raw_value }
+                            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("WriteSummary", "changes", "int", actual_wire_type, raw_value)),
+                            Probe::Absent => return Err(de_missing_field("WriteSummary", "changes", "int")),
+                        },
+                        lastInsertRowid: match probe_int_at(sub1.take_at("lastInsertRowid", &mut at1[1])) {
+                            Probe::Got(v) => v,
+                            Probe::Wrong { actual_wire_type, raw_value }
+                            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("WriteSummary", "lastInsertRowid", "int", actual_wire_type, raw_value)),
+                            Probe::Absent => return Err(de_missing_field("WriteSummary", "lastInsertRowid", "int")),
+                        },
+                    },
+                    Probe::Wrong { actual_wire_type, raw_value }
+                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", actual_wire_type, raw_value)),
+                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{changes:int,lastInsertRowid:int}")),
+                });
+            }
+            acc0
+        },
+        Probe::Wrong { actual_wire_type, raw_value }
+        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", actual_wire_type, raw_value)),
+        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})")),
+    };
+    produced_n0.set(true);
+    let __out = cell_n0.take();
+    Ok(__out)
+}
+
+#[rustfmt::skip]
+// removeNotes — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
+// de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
+// TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
+// de-boxes the returned wire INLINE (match wire.as_*() { … } fully unrolled — no decode helper) into
+// the node's outType struct cell — no boxed handler result, no generic enum crossing, no dispatch on a dynamic value on the covered plane. Node
+// results are typed struct cells; a relation child reads the parent's REAL struct result via
+// direct field access (child-present decision from the real parent value — relation /
+// connection converge). A real-concurrency stage (bc#87) is static parallel orchestration —
+// scoped worker threads (bounded by the static plan.concurrency) call the transport; preflight +
+// interpret are committed in ascending index order so the value / op multiset / failure
+// precedence byte-match run_behavior. The output is a typed struct/value assembled by struct
+// literal + field access — the consumer keeps it native.
+pub fn removeNotes(
+    ids: Vec<i64>,
+) -> Result<Vec<WriteSummary>, BehaviorError> {
+    let cell_n0: RefCell<Vec<WriteSummary>> = RefCell::new(Default::default());
+    let produced_n0 = std::cell::Cell::new(false);
+    let _ = &produced_n0;
+    // ── op 'n0' (executeSQL) ──
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Option::<DynamicWherePlan>::None, write: Some(WriteMode { returning: false }) }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() })), (Cow::Borrowed("lead"), WireValue::Str(ov1.lead.into())), (Cow::Borrowed("tail"), WireValue::Str(ov1.tail.into())), (Cow::Borrowed("tailParams"), WireValue::List(WireList { items: ov1.tailParams }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: ids.into_iter().map(WireValue::Int).collect() }), WireValue::Int(0i64)]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("DELETE FROM conf_notes WHERE id IN (SELECT v FROM JSON_TABLE(?, '$[*]' COLUMNS(v DECIMAL(65,30) PATH '$')) jt) AND (archived = ?)")))] };
+    let wire_n0 = match execute_sql(payload_n0) {
+        Ok(r) => r,
+        Err(e) => return Err(op_failed("n0", "fail", e)),
+    };
+    *cell_n0.borrow_mut() = match probe_list_at(Some(wire_n0)) {
+        Probe::Got(l0) => {
+            let mut at1 = [0usize; 2];
+            let mut acc0 = Vec::with_capacity(l0.items.len());
+            for e0 in l0.items {
+                acc0.push(match probe_row_at(Some(e0)) {
+                    Probe::Got(mut sub1) => WriteSummary {
+                        changes: match probe_int_at(sub1.take_at("changes", &mut at1[0])) {
+                            Probe::Got(v) => v,
+                            Probe::Wrong { actual_wire_type, raw_value }
+                            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("WriteSummary", "changes", "int", actual_wire_type, raw_value)),
+                            Probe::Absent => return Err(de_missing_field("WriteSummary", "changes", "int")),
+                        },
+                        lastInsertRowid: match probe_int_at(sub1.take_at("lastInsertRowid", &mut at1[1])) {
+                            Probe::Got(v) => v,
+                            Probe::Wrong { actual_wire_type, raw_value }
+                            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("WriteSummary", "lastInsertRowid", "int", actual_wire_type, raw_value)),
+                            Probe::Absent => return Err(de_missing_field("WriteSummary", "lastInsertRowid", "int")),
+                        },
+                    },
+                    Probe::Wrong { actual_wire_type, raw_value }
+                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", actual_wire_type, raw_value)),
+                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{changes:int,lastInsertRowid:int}")),
+                });
+            }
+            acc0
+        },
+        Probe::Wrong { actual_wire_type, raw_value }
+        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", actual_wire_type, raw_value)),
+        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})")),
+    };
+    produced_n0.set(true);
+    let __out = cell_n0.take();
+    Ok(__out)
+}
+
+#[rustfmt::skip]
+// renameNotes — the STRUCT-RETURNING combined read (bc#77/#87/#94): the fully
+// de-plumbed CONCRETE path. At each covered node's execution point it calls the op-agnostic leaf
+// TRANSPORT symbol DIRECTLY (the node's port fields spread — no per-node handler indirection) and
+// de-boxes the returned wire INLINE (match wire.as_*() { … } fully unrolled — no decode helper) into
+// the node's outType struct cell — no boxed handler result, no generic enum crossing, no dispatch on a dynamic value on the covered plane. Node
+// results are typed struct cells; a relation child reads the parent's REAL struct result via
+// direct field access (child-present decision from the real parent value — relation /
+// connection converge). A real-concurrency stage (bc#87) is static parallel orchestration —
+// scoped worker threads (bounded by the static plan.concurrency) call the transport; preflight +
+// interpret are committed in ascending index order so the value / op multiset / failure
+// precedence byte-match run_behavior. The output is a typed struct/value assembled by struct
+// literal + field access — the consumer keeps it native.
+pub fn renameNotes(
+    rows: Vec<RenameNotesRecord>,
+) -> Result<Vec<WriteSummary>, BehaviorError> {
+    let cell_n0: RefCell<Vec<WriteSummary>> = RefCell::new(Default::default());
+    let produced_n0 = std::cell::Cell::new(false);
+    let _ = &produced_n0;
+    // ── op 'n0' (executeSQL) ──
+    let payload_n0 = WireRow { entries: vec![(Cow::Borrowed("opts"), match Some(ExecOptions { db: Option::<String>::None, guard: Option::<CapGuard>::None, whereDynamic: Option::<DynamicWherePlan>::None, write: Some(WriteMode { returning: false }) }) { Some(ov0) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("db"), match ov0.db { Some(ov1) => WireValue::Str(ov1.into()), _ => WireValue::Null }), (Cow::Borrowed("guard"), match ov0.guard { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("limit"), WireValue::Int(ov1.limit)), (Cow::Borrowed("model"), match ov1.model { Some(ov2) => WireValue::Str(ov2.into()), _ => WireValue::Null }), (Cow::Borrowed("relation"), WireValue::Str(ov1.relation.into()))] }), _ => WireValue::Null }), (Cow::Borrowed("whereDynamic"), match ov0.whereDynamic { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("frags"), WireValue::List(WireList { items: ov1.frags.into_iter().map(|e2| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("params"), WireValue::List(WireList { items: e2.params.into_iter().map(|e4| match e4 { Some(ov5) => ov5, _ => WireValue::Null }).collect() })), (Cow::Borrowed("skipped"), WireValue::Bool(e2.skipped)), (Cow::Borrowed("sql"), WireValue::Str(e2.sql.into()))] })).collect() })), (Cow::Borrowed("lead"), WireValue::Str(ov1.lead.into())), (Cow::Borrowed("tail"), WireValue::Str(ov1.tail.into())), (Cow::Borrowed("tailParams"), WireValue::List(WireList { items: ov1.tailParams }))] }), _ => WireValue::Null }), (Cow::Borrowed("write"), match ov0.write { Some(ov1) => WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("returning"), WireValue::Bool(ov1.returning))] }), _ => WireValue::Null })] }), _ => WireValue::Null }), (Cow::Borrowed("params"), WireValue::List(WireList { items: { let __v: Vec<WireValue> = vec![WireValue::List(WireList { items: rows.into_iter().map(|e0| WireValue::Row(WireRow { entries: vec![(Cow::Borrowed("body"), WireValue::Str(e0.body.into())), (Cow::Borrowed("id"), WireValue::Int(e0.id))] })).collect() }), WireValue::Int(0i64)]; __v } })), (Cow::Borrowed("sql"), WireValue::Str(Cow::Borrowed("UPDATE conf_notes AS u JOIN JSON_TABLE(?, '$[*]' COLUMNS(id DECIMAL(65,30) PATH '$.id', body JSON PATH '$.body')) AS v ON u.id = v.id SET u.body = JSON_UNQUOTE(v.body) WHERE (u.archived = ?)")))] };
+    let wire_n0 = match execute_sql(payload_n0) {
+        Ok(r) => r,
+        Err(e) => return Err(op_failed("n0", "fail", e)),
+    };
+    *cell_n0.borrow_mut() = match probe_list_at(Some(wire_n0)) {
+        Probe::Got(l0) => {
+            let mut at1 = [0usize; 2];
+            let mut acc0 = Vec::with_capacity(l0.items.len());
+            for e0 in l0.items {
+                acc0.push(match probe_row_at(Some(e0)) {
+                    Probe::Got(mut sub1) => WriteSummary {
+                        changes: match probe_int_at(sub1.take_at("changes", &mut at1[0])) {
+                            Probe::Got(v) => v,
+                            Probe::Wrong { actual_wire_type, raw_value }
+                            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("WriteSummary", "changes", "int", actual_wire_type, raw_value)),
+                            Probe::Absent => return Err(de_missing_field("WriteSummary", "changes", "int")),
+                        },
+                        lastInsertRowid: match probe_int_at(sub1.take_at("lastInsertRowid", &mut at1[1])) {
+                            Probe::Got(v) => v,
+                            Probe::Wrong { actual_wire_type, raw_value }
+                            | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("WriteSummary", "lastInsertRowid", "int", actual_wire_type, raw_value)),
+                            Probe::Absent => return Err(de_missing_field("WriteSummary", "lastInsertRowid", "int")),
+                        },
+                    },
+                    Probe::Wrong { actual_wire_type, raw_value }
+                    | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", actual_wire_type, raw_value)),
+                    Probe::Absent => return Err(de_missing_field("n0", "n0", "obj{changes:int,lastInsertRowid:int}")),
+                });
+            }
+            acc0
+        },
+        Probe::Wrong { actual_wire_type, raw_value }
+        | Probe::Null { actual_wire_type, raw_value } => return Err(de_type_mismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", actual_wire_type, raw_value)),
+        Probe::Absent => return Err(de_missing_field("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})")),
+    };
+    produced_n0.set(true);
+    let __out = cell_n0.take();
+    Ok(__out)
+}
+
+#[rustfmt::skip]
 // COMPONENT_NAMES_NATIVE_RAW — covered reads exposed on the combined struct-native path. Each is a
 // 1:1 entry <method>(<positional params>) -> Result<T, BehaviorError>: a STRUCT return (the consumer calls
 // it with the authored args + supplies the op-agnostic leaf transport symbols the entry calls).
 // See INTEGRATION.md §6.
-pub const COMPONENT_NAMES_NATIVE_RAW: [&str; 31] = ["posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "optionalOnlyFeed", "quotedOrderFeed", "quotedWhereOrderFeed", "viewFeed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createDoc", "createLine", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning"];
+pub const COMPONENT_NAMES_NATIVE_RAW: [&str; 38] = ["posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "optionalOnlyFeed", "quotedOrderFeed", "quotedWhereOrderFeed", "viewFeed", "usersWithPosts", "postsWithAuthor", "notes", "notesByAuthor", "usersWithFilteredRelations", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createDoc", "createLine", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning", "renameNote", "removeNote", "removeNotes", "renameNotes"];

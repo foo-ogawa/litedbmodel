@@ -333,6 +333,82 @@ mod imp {
         name,
         post_count
     });
+    impl_to_compare!(pg::NotesRow {
+        archived,
+        author_id,
+        body,
+        id
+    });
+    impl_to_compare!(pg::NotesByAuthorRow {
+        archived,
+        author_id,
+        body,
+        id
+    });
+    impl_to_compare!(pg::UsersWithFilteredRelationsRow {
+        id,
+        latestNote,
+        livePosts,
+        name,
+        notes
+    });
+    impl_to_compare!(pg::UsersWithFilteredRelationsRow_latestNote {
+        archived,
+        author_id,
+        body,
+        id
+    });
+    impl_to_compare!(pg::UsersWithFilteredRelationsRow_livePosts {
+        author_id,
+        created_at,
+        id,
+        status,
+        title
+    });
+    impl_to_compare!(pg::UsersWithFilteredRelationsRow_notes {
+        archived,
+        author_id,
+        body,
+        id
+    });
+    impl_to_compare!(my::NotesRow {
+        archived,
+        author_id,
+        body,
+        id
+    });
+    impl_to_compare!(my::NotesByAuthorRow {
+        archived,
+        author_id,
+        body,
+        id
+    });
+    impl_to_compare!(my::UsersWithFilteredRelationsRow {
+        id,
+        latestNote,
+        livePosts,
+        name,
+        notes
+    });
+    impl_to_compare!(my::UsersWithFilteredRelationsRow_latestNote {
+        archived,
+        author_id,
+        body,
+        id
+    });
+    impl_to_compare!(my::UsersWithFilteredRelationsRow_livePosts {
+        author_id,
+        created_at,
+        id,
+        status,
+        title
+    });
+    impl_to_compare!(my::UsersWithFilteredRelationsRow_notes {
+        archived,
+        author_id,
+        body,
+        id
+    });
     impl_to_compare!(pg::WriteSummary {
         changes,
         lastInsertRowid
@@ -569,6 +645,28 @@ mod imp {
                 my::postsWithAuthor().map(|r| r.to_compare())
             }
         }),
+        ("notes", |pg, _input| {
+            if pg {
+                pg::notes().map(|r| r.to_compare())
+            } else {
+                my::notes().map(|r| r.to_compare())
+            }
+        }),
+        ("notesByAuthor", |pg, input| {
+            let a = in_i64(input, "authorId");
+            if pg {
+                pg::notesByAuthor(a).map(|r| r.to_compare())
+            } else {
+                my::notesByAuthor(a).map(|r| r.to_compare())
+            }
+        }),
+        ("usersWithFilteredRelations", |pg, _input| {
+            if pg {
+                pg::usersWithFilteredRelations().map(|r| r.to_compare())
+            } else {
+                my::usersWithFilteredRelations().map(|r| r.to_compare())
+            }
+        }),
         ("createPost", |pg, input| {
             let (id, a, t, s, c) = (
                 in_i64(input, "id"),
@@ -741,6 +839,45 @@ mod imp {
                     })
                     .collect();
                 my::relabelTagsReturning(rows).map(|r| r.to_compare())
+            }
+        }),
+        ("renameNote", |pg, input| {
+            let (b, id) = (in_str(input, "body"), in_i64(input, "id"));
+            if pg {
+                pg::renameNote(b, id).map(|r| r.to_compare())
+            } else {
+                my::renameNote(b, id).map(|r| r.to_compare())
+            }
+        }),
+        ("removeNote", |pg, input| {
+            let id = in_i64(input, "id");
+            if pg {
+                pg::removeNote(id).map(|r| r.to_compare())
+            } else {
+                my::removeNote(id).map(|r| r.to_compare())
+            }
+        }),
+        ("removeNotes", |pg, input| {
+            let ids = in_i64s(input, "ids");
+            if pg {
+                pg::removeNotes(ids).map(|r| r.to_compare())
+            } else {
+                my::removeNotes(ids).map(|r| r.to_compare())
+            }
+        }),
+        ("renameNotes", |pg, input| {
+            if pg {
+                pg::renameNotes(in_i64s(input, "rows_id"), in_strs(input, "rows_body"))
+                    .map(|r| r.to_compare())
+            } else {
+                let rows = in_records(input)
+                    .iter()
+                    .map(|r| my::RenameNotesRecord {
+                        body: in_str(r, "body"),
+                        id: in_i64(r, "id"),
+                    })
+                    .collect();
+                my::renameNotes(rows).map(|r| r.to_compare())
             }
         }),
     ];

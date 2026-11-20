@@ -2,7 +2,7 @@
 
 # Class: Conditions\<Model\>
 
-Defined in: [Column.ts:639](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L639)
+Defined in: [Column.ts:640](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L640)
 
 Type-safe builder for query conditions.
 Use array literals for static conditions, builder for dynamic construction.
@@ -43,7 +43,7 @@ if (query.active) where.add(User.is_active, true);
 new Conditions(initial?: Conds): Conditions<Model>;
 ```
 
-Defined in: [Column.ts:645](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L645)
+Defined in: [Column.ts:646](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L646)
 
 Create a Conditions builder, optionally with initial conditions.
 
@@ -61,7 +61,7 @@ Create a Conditions builder, optionally with initial conditions.
 get length(): number;
 ```
 
-Defined in: [Column.ts:711](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L711)
+Defined in: [Column.ts:712](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L712)
 
 Get the number of conditions.
 
@@ -77,7 +77,7 @@ Get the number of conditions.
 add<V>(column: Column<V, Model>, value: V | null | undefined): this;
 ```
 
-Defined in: [Column.ts:654](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L654)
+Defined in: [Column.ts:655](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L655)
 
 Add a type-safe column equality condition.
 
@@ -106,7 +106,7 @@ Add a type-safe column equality condition.
 addRaw(condition: string, value?: unknown): this;
 ```
 
-Defined in: [Column.ts:662](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L662)
+Defined in: [Column.ts:663](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L663)
 
 Add a raw condition with template literal (e.g., `${User.age} > ?`).
 
@@ -129,7 +129,7 @@ Add a raw condition with template literal (e.g., `${User.age} > ?`).
 addSql<V>(fragment: SqlTypedFragment<V, Model>, value: V): this;
 ```
 
-Defined in: [Column.ts:681](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L681)
+Defined in: [Column.ts:682](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L682)
 
 Add a type-safe sql-tagged condition.
 
@@ -164,7 +164,7 @@ where.addSql(sql`${User.deleted_at} IS NULL`);
 addSql(fragment: SqlTypedFragment<any, Model>): this;
 ```
 
-Defined in: [Column.ts:682](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L682)
+Defined in: [Column.ts:683](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L683)
 
 Add a type-safe sql-tagged condition.
 
@@ -194,7 +194,7 @@ where.addSql(sql`${User.deleted_at} IS NULL`);
 or(...condGroups: readonly Conds[]): this;
 ```
 
-Defined in: [Column.ts:696](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L696)
+Defined in: [Column.ts:697](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L697)
 
 Add an OR condition group.
 
@@ -216,7 +216,7 @@ Add an OR condition group.
 build(): Conds;
 ```
 
-Defined in: [Column.ts:704](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L704)
+Defined in: [Column.ts:705](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L705)
 
 Build the final array for use with find/count/delete.
 

@@ -12,6 +12,7 @@ import type {
   FindByPkeysOptions,
   SqlBuildResult,
 } from './types';
+import { takeScope } from './types';
 import { castToJson } from './PostgresHelper';
 import { DBToken } from '../DBValues';
 import { formatUTCDate } from '../TypeCast';
@@ -320,6 +321,7 @@ export const postgresSqlBuilder: SqlBuilder = {
       sqlCastMap = new Map(),
       skipMap = new Map(),
       returning,
+      scope,
     } = options;
 
     const params: unknown[] = [];
@@ -415,8 +417,10 @@ export const postgresSqlBuilder: SqlBuilder = {
       }
     }
 
-    // Build WHERE clause for key columns
+    // Build WHERE clause for key columns, then the default filter (qualified by the target alias `t`)
     const whereConditions = keyColumns.map(col => `t.${col} = v.${col}`);
+    const filter = takeScope(scope, params, 't');
+    if (filter !== '') whereConditions.push(filter);
 
     const allUnnestCols = [...allColumns, ...skipFlagCols];
     let sql = `UPDATE ${tableName} AS t SET ${setClauses.join(', ')} ` +
@@ -431,7 +435,7 @@ export const postgresSqlBuilder: SqlBuilder = {
   },
 
   buildFindByPkeys(options: FindByPkeysOptions): SqlBuildResult {
-    const { tableName, pkeyColumns, pkeyValues, selectColumn, sqlCastMap } = options;
+    const { tableName, pkeyColumns, pkeyValues, selectColumn, sqlCastMap, scope } = options;
     const params: unknown[] = [];
 
     if (pkeyColumns.length === 1) {
@@ -440,7 +444,8 @@ export const postgresSqlBuilder: SqlBuilder = {
       params.push(colValues);
       const sqlCast = sqlCastMap?.get(pkeyColumns[0]);
       const pgType = sqlCast || inferPgType(colValues.find(v => v !== null && v !== undefined));
-      const sql = `SELECT ${selectColumn} FROM ${tableName} WHERE ${pkeyColumns[0]} = ANY(?::${pgType}[])`;
+      const filter = takeScope(scope, params);
+      const sql = `SELECT ${selectColumn} FROM ${tableName} WHERE ${pkeyColumns[0]} = ANY(?::${pgType}[])${filter === '' ? '' : ` AND ${filter}`}`;
       return { sql, params };
     }
 
@@ -453,8 +458,9 @@ export const postgresSqlBuilder: SqlBuilder = {
       const pgType = sqlCast || inferPgType(colValues.find(v => v !== null && v !== undefined));
       unnestArrays.push(`?::${pgType}[]`);
     }
+    const filter = takeScope(scope, params);
     const sql = `SELECT ${selectColumn} FROM ${tableName} ` +
-          `WHERE (${pkeyColumns.join(', ')}) IN (SELECT * FROM UNNEST(${unnestArrays.join(', ')}))`;
+          `WHERE (${pkeyColumns.join(', ')}) IN (SELECT * FROM UNNEST(${unnestArrays.join(', ')}))${filter === '' ? '' : ` AND ${filter}`}`;
     return { sql, params };
   },
 

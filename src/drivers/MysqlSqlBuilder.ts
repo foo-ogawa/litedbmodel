@@ -13,6 +13,7 @@ import type {
   FindByPkeysOptions,
   SqlBuildResult,
 } from './types';
+import { takeScope } from './types';
 import { castToJson } from './MysqlHelper';
 import { DBToken } from '../DBValues';
 
@@ -174,6 +175,7 @@ export const mysqlSqlBuilder: SqlBuilder = {
       updateColumns,
       records,
       skipMap = new Map(),
+      scope,
     } = options;
 
     const params: unknown[] = [];
@@ -236,44 +238,51 @@ export const mysqlSqlBuilder: SqlBuilder = {
           `JOIN (VALUES ${valueRowDefs.join(', ')}) AS v(${allValueCols.join(', ')}) ` +
           `ON ${whereConditions.join(' AND ')} ` +
           `SET ${setClauses.join(', ')}`;
+    // The default filter, qualified by the target alias `t` (its values bind after every VALUES row).
+    const filter = takeScope(scope, params, 't');
+    const scoped = `${sql}${filter === '' ? '' : ` WHERE ${filter}`}`;
 
-    return { sql, params };
+    return { sql: scoped, params };
   },
 
   buildSelectPkeys(options: SelectPkeysOptions): SqlBuildResult {
-    const { tableName, pkeyColumns, keyColumns, keyValues } = options;
+    const { tableName, pkeyColumns, keyColumns, keyValues, scope } = options;
     const params: unknown[] = [];
 
     if (keyColumns.length === 1) {
       // Single key: WHERE col IN (?)
       params.push(keyValues.map(kv => kv[0]));
-      const sql = `SELECT DISTINCT ${pkeyColumns.join(', ')} FROM ${tableName} WHERE ${keyColumns[0]} IN (?)`;
+      const filter = takeScope(scope, params);
+      const sql = `SELECT DISTINCT ${pkeyColumns.join(', ')} FROM ${tableName} WHERE ${keyColumns[0]} IN (?)${filter === '' ? '' : ` AND ${filter}`}`;
       return { sql, params };
     }
 
     // Composite key: match the key TUPLES (#375). Per-column `k1 IN (…) AND k2 IN (…)` matched the
     // cross product of the values, i.e. rows the UPDATE (which joins on the tuples) never touched.
     const join = keyTupleJoin(keyColumns, keyValues, params);
-    const sql = `SELECT DISTINCT ${pkeyColumns.map(col => `t.${col}`).join(', ')} FROM ${tableName} AS t ${join}`;
+    const filter = takeScope(scope, params, 't');
+    const sql = `SELECT DISTINCT ${pkeyColumns.map(col => `t.${col}`).join(', ')} FROM ${tableName} AS t ${join}${filter === '' ? '' : ` WHERE ${filter}`}`;
     return { sql, params };
   },
 
   buildFindByPkeys(options: FindByPkeysOptions): SqlBuildResult {
-    const { tableName, pkeyColumns, pkeyValues, selectColumn } = options;
+    const { tableName, pkeyColumns, pkeyValues, selectColumn, scope } = options;
     const params: unknown[] = [];
 
     if (pkeyColumns.length === 1) {
       // Single PK: WHERE id IN (?, ?, ...)
       const placeholders = pkeyValues.map(() => '?').join(', ');
       params.push(...pkeyValues.map(v => v[0]));
-      const sql = `SELECT ${selectColumn} FROM ${tableName} WHERE ${pkeyColumns[0]} IN (${placeholders})`;
+      const filter = takeScope(scope, params);
+      const sql = `SELECT ${selectColumn} FROM ${tableName} WHERE ${pkeyColumns[0]} IN (${placeholders})${filter === '' ? '' : ` AND ${filter}`}`;
       return { sql, params };
     }
 
     // Composite PK: JOIN (VALUES ROW(...)) AS v ON ...
     const join = keyTupleJoin(pkeyColumns, pkeyValues, params);
     const selectCol = selectColumn === '*' ? 't.*' : selectColumn;
-    const sql = `SELECT ${selectCol} FROM ${tableName} AS t ${join}`;
+    const filter = takeScope(scope, params, 't');
+    const sql = `SELECT ${selectCol} FROM ${tableName} AS t ${join}${filter === '' ? '' : ` WHERE ${filter}`}`;
     return { sql, params };
   },
 

@@ -816,6 +816,370 @@ def posts_with_author():
     return t_n3
 
 
+def notes():
+    t_n0 = None
+    produced_n0 = False
+    # op 'n0' (executeSQL)
+    payload_n0 = {"params": [0], "sql": "SELECT id, author_id, body, archived FROM conf_notes WHERE (archived = ?) ORDER BY id ASC"}
+    try:
+        w_n0 = _bc_leaf_execute_sql(payload_n0)
+    except Exception as err_n0:
+        raise _bc_op_failed("n0", "fail", err_n0) from err_n0
+    if (not _bc_isinstance(w_n0, _bc_list)):
+        raise _bc_mismatch("n0", "n0", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})", w_n0)
+    d1 = []
+    for d2 in w_n0:
+        if (not _bc_isinstance(d2, _bc_dict)):
+            raise _bc_mismatch("n0", "n0", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}", d2)
+        d3 = {}
+        if ("archived" in d2):
+            d4 = d2["archived"]
+            d3["archived"] = (None if (d4 is None) else _bc_de_int(d4, "NotesRow", "archived", "opt(int)"))
+        else:
+            d3["archived"] = None
+        if ("author_id" in d2):
+            d5 = d2["author_id"]
+            d3["author_id"] = (None if (d5 is None) else _bc_de_int(d5, "NotesRow", "author_id", "opt(int)"))
+        else:
+            d3["author_id"] = None
+        if ("body" in d2):
+            d6 = d2["body"]
+            d3["body"] = (None if (d6 is None) else _bc_de_string(d6, "NotesRow", "body", "opt(string)"))
+        else:
+            d3["body"] = None
+        if ("id" in d2):
+            d7 = d2["id"]
+            d3["id"] = (None if (d7 is None) else _bc_de_int(d7, "NotesRow", "id", "opt(int)"))
+        else:
+            d3["id"] = None
+        d1.append(d3)
+    t_n0 = d1
+    produced_n0 = True
+    return t_n0
+
+
+def notes_by_author(authorId):
+    t_n0 = None
+    produced_n0 = False
+    # op 'n0' (executeSQL)
+    payload_n0 = {"params": [authorId, 0], "sql": "SELECT id, author_id, body, archived FROM conf_notes WHERE author_id = ? AND (archived = ?) ORDER BY id ASC"}
+    try:
+        w_n0 = _bc_leaf_execute_sql(payload_n0)
+    except Exception as err_n0:
+        raise _bc_op_failed("n0", "fail", err_n0) from err_n0
+    if (not _bc_isinstance(w_n0, _bc_list)):
+        raise _bc_mismatch("n0", "n0", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})", w_n0)
+    d1 = []
+    for d2 in w_n0:
+        if (not _bc_isinstance(d2, _bc_dict)):
+            raise _bc_mismatch("n0", "n0", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}", d2)
+        d3 = {}
+        if ("archived" in d2):
+            d4 = d2["archived"]
+            d3["archived"] = (None if (d4 is None) else _bc_de_int(d4, "NotesByAuthorRow", "archived", "opt(int)"))
+        else:
+            d3["archived"] = None
+        if ("author_id" in d2):
+            d5 = d2["author_id"]
+            d3["author_id"] = (None if (d5 is None) else _bc_de_int(d5, "NotesByAuthorRow", "author_id", "opt(int)"))
+        else:
+            d3["author_id"] = None
+        if ("body" in d2):
+            d6 = d2["body"]
+            d3["body"] = (None if (d6 is None) else _bc_de_string(d6, "NotesByAuthorRow", "body", "opt(string)"))
+        else:
+            d3["body"] = None
+        if ("id" in d2):
+            d7 = d2["id"]
+            d3["id"] = (None if (d7 is None) else _bc_de_int(d7, "NotesByAuthorRow", "id", "opt(int)"))
+        else:
+            d3["id"] = None
+        d1.append(d3)
+    t_n0 = d1
+    produced_n0 = True
+    return t_n0
+
+
+def users_with_filtered_relations():
+    t_n0 = None
+    produced_n0 = False
+    t_n1 = None
+    produced_n1 = False
+    t_n2 = None
+    produced_n2 = False
+    t_n3 = None
+    produced_n3 = False
+    t_n4 = None
+    produced_n4 = False
+    t_n5 = None
+    produced_n5 = False
+    t_n6 = None
+    produced_n6 = False
+    t_n7 = None
+    produced_n7 = False
+    t_n8 = None
+    produced_n8 = False
+    t_n9 = None
+    produced_n9 = False
+    # op 'n0' (executeSQL)
+    payload_n0 = {"params": [], "sql": "SELECT id, name FROM conf_users ORDER BY id ASC"}
+    try:
+        w_n0 = _bc_leaf_execute_sql(payload_n0)
+    except Exception as err_n0:
+        raise _bc_op_failed("n0", "fail", err_n0) from err_n0
+    if (not _bc_isinstance(w_n0, _bc_list)):
+        raise _bc_mismatch("n0", "n0", "arr(value)", w_n0)
+    d1 = []
+    for d2 in w_n0:
+        d1.append(d2)
+    t_n0 = d1
+    produced_n0 = True
+    # op 'n1' (pluck, parent:n0)
+    if produced_n0:
+        payload_n1 = {"col": ["id"], "rows": t_n0}
+        try:
+            w_n1 = _bc_leaf_pluck_keys(payload_n1)
+        except Exception as err_n1:
+            raise _bc_op_failed("n1", "fail", err_n1) from err_n1
+        if (not _bc_isinstance(w_n1, _bc_list)):
+            raise _bc_mismatch("n1", "n1", "arr(value)", w_n1)
+        d3 = []
+        for d4 in w_n1:
+            d3.append(d4)
+        t_n1 = d3
+        produced_n1 = True
+    # op 'n2' (executeSQL, parent:n1)
+    if produced_n1:
+        payload_n2 = {"params": [t_n1, "live"], "sql": "SELECT id, author_id, title, status, created_at FROM conf_posts WHERE conf_posts.author_id = ANY(?::bigint[]) AND status = ? ORDER BY id ASC"}
+        try:
+            w_n2 = _bc_leaf_execute_sql(payload_n2)
+        except Exception as err_n2:
+            raise _bc_op_failed("n2", "fail", err_n2) from err_n2
+        if (not _bc_isinstance(w_n2, _bc_list)):
+            raise _bc_mismatch("n2", "n2", "arr(value)", w_n2)
+        d5 = []
+        for d6 in w_n2:
+            d5.append(d6)
+        t_n2 = d5
+        produced_n2 = True
+    # op 'n3' (group, parent:n0)
+    if produced_n0:
+        payload_n3 = {"children": t_n2, "fk": ["author_id"], "into": "livePosts", "parents": t_n0, "pk": ["id"], "single": False}
+        try:
+            w_n3 = _bc_leaf_group_children(payload_n3)
+        except Exception as err_n3:
+            raise _bc_op_failed("n3", "fail", err_n3) from err_n3
+        if (not _bc_isinstance(w_n3, _bc_list)):
+            raise _bc_mismatch("n3", "n3", "arr(value)", w_n3)
+        d7 = []
+        for d8 in w_n3:
+            d7.append(d8)
+        t_n3 = d7
+        produced_n3 = True
+    # op 'n4' (pluck, parent:n3)
+    if produced_n3:
+        payload_n4 = {"col": ["id"], "rows": t_n3}
+        try:
+            w_n4 = _bc_leaf_pluck_keys(payload_n4)
+        except Exception as err_n4:
+            raise _bc_op_failed("n4", "fail", err_n4) from err_n4
+        if (not _bc_isinstance(w_n4, _bc_list)):
+            raise _bc_mismatch("n4", "n4", "arr(value)", w_n4)
+        d9 = []
+        for d10 in w_n4:
+            d9.append(d10)
+        t_n4 = d9
+        produced_n4 = True
+    # op 'n5' (executeSQL, parent:n4)
+    if produced_n4:
+        payload_n5 = {"params": [t_n4, 0], "sql": "SELECT id, author_id, body, archived FROM conf_notes WHERE conf_notes.author_id = ANY(?::bigint[]) AND (archived = ?) ORDER BY id ASC"}
+        try:
+            w_n5 = _bc_leaf_execute_sql(payload_n5)
+        except Exception as err_n5:
+            raise _bc_op_failed("n5", "fail", err_n5) from err_n5
+        if (not _bc_isinstance(w_n5, _bc_list)):
+            raise _bc_mismatch("n5", "n5", "arr(value)", w_n5)
+        d11 = []
+        for d12 in w_n5:
+            d11.append(d12)
+        t_n5 = d11
+        produced_n5 = True
+    # op 'n6' (group, parent:n3)
+    if produced_n3:
+        payload_n6 = {"children": t_n5, "fk": ["author_id"], "into": "notes", "parents": t_n3, "pk": ["id"], "single": False}
+        try:
+            w_n6 = _bc_leaf_group_children(payload_n6)
+        except Exception as err_n6:
+            raise _bc_op_failed("n6", "fail", err_n6) from err_n6
+        if (not _bc_isinstance(w_n6, _bc_list)):
+            raise _bc_mismatch("n6", "n6", "arr(value)", w_n6)
+        d13 = []
+        for d14 in w_n6:
+            d13.append(d14)
+        t_n6 = d13
+        produced_n6 = True
+    # op 'n7' (pluck, parent:n6)
+    if produced_n6:
+        payload_n7 = {"col": ["id"], "rows": t_n6}
+        try:
+            w_n7 = _bc_leaf_pluck_keys(payload_n7)
+        except Exception as err_n7:
+            raise _bc_op_failed("n7", "fail", err_n7) from err_n7
+        if (not _bc_isinstance(w_n7, _bc_list)):
+            raise _bc_mismatch("n7", "n7", "arr(value)", w_n7)
+        d15 = []
+        for d16 in w_n7:
+            d15.append(d16)
+        t_n7 = d15
+        produced_n7 = True
+    # op 'n8' (executeSQL, parent:n7)
+    if produced_n7:
+        payload_n8 = {"params": [t_n7, 0], "sql": "SELECT conf_notes.* FROM unnest(?::bigint[]) AS _keys(key) CROSS JOIN LATERAL (SELECT * FROM conf_notes WHERE conf_notes.author_id = _keys.key AND (archived = ?) ORDER BY id DESC LIMIT 1) conf_notes"}
+        try:
+            w_n8 = _bc_leaf_execute_sql(payload_n8)
+        except Exception as err_n8:
+            raise _bc_op_failed("n8", "fail", err_n8) from err_n8
+        if (not _bc_isinstance(w_n8, _bc_list)):
+            raise _bc_mismatch("n8", "n8", "arr(value)", w_n8)
+        d17 = []
+        for d18 in w_n8:
+            d17.append(d18)
+        t_n8 = d17
+        produced_n8 = True
+    # op 'n9' (group, parent:n6)
+    if produced_n6:
+        payload_n9 = {"children": t_n8, "fk": ["author_id"], "into": "latestNote", "parents": t_n6, "pk": ["id"], "single": False}
+        try:
+            w_n9 = _bc_leaf_group_children(payload_n9)
+        except Exception as err_n9:
+            raise _bc_op_failed("n9", "fail", err_n9) from err_n9
+        if (not _bc_isinstance(w_n9, _bc_list)):
+            raise _bc_mismatch("n9", "n9", "arr(obj{id:opt(int),latestNote:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}),livePosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}),name:opt(string),notes:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})})", w_n9)
+        d19 = []
+        for d20 in w_n9:
+            if (not _bc_isinstance(d20, _bc_dict)):
+                raise _bc_mismatch("n9", "n9", "obj{id:opt(int),latestNote:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}),livePosts:arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}),name:opt(string),notes:arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})}", d20)
+            d21 = {}
+            if ("id" in d20):
+                d22 = d20["id"]
+                d21["id"] = (None if (d22 is None) else _bc_de_int(d22, "UsersWithFilteredRelationsRow", "id", "opt(int)"))
+            else:
+                d21["id"] = None
+            if ("latestNote" in d20):
+                d23 = d20["latestNote"]
+                if (not _bc_isinstance(d23, _bc_list)):
+                    raise _bc_mismatch("UsersWithFilteredRelationsRow", "latestNote", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})", d23)
+                d24 = []
+                for d25 in d23:
+                    if (not _bc_isinstance(d25, _bc_dict)):
+                        raise _bc_mismatch("UsersWithFilteredRelationsRow", "latestNote", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}", d25)
+                    d26 = {}
+                    if ("archived" in d25):
+                        d27 = d25["archived"]
+                        d26["archived"] = (None if (d27 is None) else _bc_de_int(d27, "UsersWithFilteredRelationsRow_latestNote", "archived", "opt(int)"))
+                    else:
+                        d26["archived"] = None
+                    if ("author_id" in d25):
+                        d28 = d25["author_id"]
+                        d26["author_id"] = (None if (d28 is None) else _bc_de_int(d28, "UsersWithFilteredRelationsRow_latestNote", "author_id", "opt(int)"))
+                    else:
+                        d26["author_id"] = None
+                    if ("body" in d25):
+                        d29 = d25["body"]
+                        d26["body"] = (None if (d29 is None) else _bc_de_string(d29, "UsersWithFilteredRelationsRow_latestNote", "body", "opt(string)"))
+                    else:
+                        d26["body"] = None
+                    if ("id" in d25):
+                        d30 = d25["id"]
+                        d26["id"] = (None if (d30 is None) else _bc_de_int(d30, "UsersWithFilteredRelationsRow_latestNote", "id", "opt(int)"))
+                    else:
+                        d26["id"] = None
+                    d24.append(d26)
+                d21["latestNote"] = d24
+            else:
+                raise _bc_missing("UsersWithFilteredRelationsRow", "latestNote", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})")
+            if ("livePosts" in d20):
+                d31 = d20["livePosts"]
+                if (not _bc_isinstance(d31, _bc_list)):
+                    raise _bc_mismatch("UsersWithFilteredRelationsRow", "livePosts", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})", d31)
+                d32 = []
+                for d33 in d31:
+                    if (not _bc_isinstance(d33, _bc_dict)):
+                        raise _bc_mismatch("UsersWithFilteredRelationsRow", "livePosts", "obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)}", d33)
+                    d34 = {}
+                    if ("author_id" in d33):
+                        d35 = d33["author_id"]
+                        d34["author_id"] = (None if (d35 is None) else _bc_de_int(d35, "UsersWithFilteredRelationsRow_livePosts", "author_id", "opt(int)"))
+                    else:
+                        d34["author_id"] = None
+                    if ("created_at" in d33):
+                        d36 = d33["created_at"]
+                        d34["created_at"] = (None if (d36 is None) else _bc_de_string(d36, "UsersWithFilteredRelationsRow_livePosts", "created_at", "opt(string)"))
+                    else:
+                        d34["created_at"] = None
+                    if ("id" in d33):
+                        d37 = d33["id"]
+                        d34["id"] = (None if (d37 is None) else _bc_de_int(d37, "UsersWithFilteredRelationsRow_livePosts", "id", "opt(int)"))
+                    else:
+                        d34["id"] = None
+                    if ("status" in d33):
+                        d38 = d33["status"]
+                        d34["status"] = (None if (d38 is None) else _bc_de_string(d38, "UsersWithFilteredRelationsRow_livePosts", "status", "opt(string)"))
+                    else:
+                        d34["status"] = None
+                    if ("title" in d33):
+                        d39 = d33["title"]
+                        d34["title"] = (None if (d39 is None) else _bc_de_string(d39, "UsersWithFilteredRelationsRow_livePosts", "title", "opt(string)"))
+                    else:
+                        d34["title"] = None
+                    d32.append(d34)
+                d21["livePosts"] = d32
+            else:
+                raise _bc_missing("UsersWithFilteredRelationsRow", "livePosts", "arr(obj{author_id:opt(int),created_at:opt(string),id:opt(int),status:opt(string),title:opt(string)})")
+            if ("name" in d20):
+                d40 = d20["name"]
+                d21["name"] = (None if (d40 is None) else _bc_de_string(d40, "UsersWithFilteredRelationsRow", "name", "opt(string)"))
+            else:
+                d21["name"] = None
+            if ("notes" in d20):
+                d41 = d20["notes"]
+                if (not _bc_isinstance(d41, _bc_list)):
+                    raise _bc_mismatch("UsersWithFilteredRelationsRow", "notes", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})", d41)
+                d42 = []
+                for d43 in d41:
+                    if (not _bc_isinstance(d43, _bc_dict)):
+                        raise _bc_mismatch("UsersWithFilteredRelationsRow", "notes", "obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)}", d43)
+                    d44 = {}
+                    if ("archived" in d43):
+                        d45 = d43["archived"]
+                        d44["archived"] = (None if (d45 is None) else _bc_de_int(d45, "UsersWithFilteredRelationsRow_notes", "archived", "opt(int)"))
+                    else:
+                        d44["archived"] = None
+                    if ("author_id" in d43):
+                        d46 = d43["author_id"]
+                        d44["author_id"] = (None if (d46 is None) else _bc_de_int(d46, "UsersWithFilteredRelationsRow_notes", "author_id", "opt(int)"))
+                    else:
+                        d44["author_id"] = None
+                    if ("body" in d43):
+                        d47 = d43["body"]
+                        d44["body"] = (None if (d47 is None) else _bc_de_string(d47, "UsersWithFilteredRelationsRow_notes", "body", "opt(string)"))
+                    else:
+                        d44["body"] = None
+                    if ("id" in d43):
+                        d48 = d43["id"]
+                        d44["id"] = (None if (d48 is None) else _bc_de_int(d48, "UsersWithFilteredRelationsRow_notes", "id", "opt(int)"))
+                    else:
+                        d44["id"] = None
+                    d42.append(d44)
+                d21["notes"] = d42
+            else:
+                raise _bc_missing("UsersWithFilteredRelationsRow", "notes", "arr(obj{archived:opt(int),author_id:opt(int),body:opt(string),id:opt(int)})")
+            d19.append(d21)
+        t_n9 = d19
+        produced_n9 = True
+    return t_n9
+
+
 def users_with_capped_posts():
     t_n0 = None
     produced_n0 = False
@@ -1687,5 +2051,125 @@ def remove_tags_returning(ids):
     return t_n0
 
 
+def rename_note(body, id):
+    t_n0 = None
+    produced_n0 = False
+    # op 'n0' (executeSQL)
+    payload_n0 = {"opts": {"db": None, "guard": None, "whereDynamic": None, "write": {"returning": False}}, "params": [body, id, 0], "sql": "UPDATE conf_notes SET body = ? WHERE id = ? AND (archived = ?)"}
+    try:
+        w_n0 = _bc_leaf_execute_sql(payload_n0)
+    except Exception as err_n0:
+        raise _bc_op_failed("n0", "fail", err_n0) from err_n0
+    if (not _bc_isinstance(w_n0, _bc_list)):
+        raise _bc_mismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", w_n0)
+    d1 = []
+    for d2 in w_n0:
+        if (not _bc_isinstance(d2, _bc_dict)):
+            raise _bc_mismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", d2)
+        d3 = {}
+        if ("changes" in d2):
+            d3["changes"] = _bc_de_int(d2["changes"], "WriteSummary", "changes", "int")
+        else:
+            raise _bc_missing("WriteSummary", "changes", "int")
+        if ("lastInsertRowid" in d2):
+            d3["lastInsertRowid"] = _bc_de_int(d2["lastInsertRowid"], "WriteSummary", "lastInsertRowid", "int")
+        else:
+            raise _bc_missing("WriteSummary", "lastInsertRowid", "int")
+        d1.append(d3)
+    t_n0 = d1
+    produced_n0 = True
+    return t_n0
+
+
+def remove_note(id):
+    t_n0 = None
+    produced_n0 = False
+    # op 'n0' (executeSQL)
+    payload_n0 = {"opts": {"db": None, "guard": None, "whereDynamic": None, "write": {"returning": False}}, "params": [id, 0], "sql": "DELETE FROM conf_notes WHERE id = ? AND (archived = ?)"}
+    try:
+        w_n0 = _bc_leaf_execute_sql(payload_n0)
+    except Exception as err_n0:
+        raise _bc_op_failed("n0", "fail", err_n0) from err_n0
+    if (not _bc_isinstance(w_n0, _bc_list)):
+        raise _bc_mismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", w_n0)
+    d1 = []
+    for d2 in w_n0:
+        if (not _bc_isinstance(d2, _bc_dict)):
+            raise _bc_mismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", d2)
+        d3 = {}
+        if ("changes" in d2):
+            d3["changes"] = _bc_de_int(d2["changes"], "WriteSummary", "changes", "int")
+        else:
+            raise _bc_missing("WriteSummary", "changes", "int")
+        if ("lastInsertRowid" in d2):
+            d3["lastInsertRowid"] = _bc_de_int(d2["lastInsertRowid"], "WriteSummary", "lastInsertRowid", "int")
+        else:
+            raise _bc_missing("WriteSummary", "lastInsertRowid", "int")
+        d1.append(d3)
+    t_n0 = d1
+    produced_n0 = True
+    return t_n0
+
+
+def remove_notes(ids):
+    t_n0 = None
+    produced_n0 = False
+    # op 'n0' (executeSQL)
+    payload_n0 = {"opts": {"db": None, "guard": None, "whereDynamic": None, "write": {"returning": False}}, "params": [ids, 0], "sql": "DELETE FROM conf_notes WHERE id = ANY(?) AND (archived = ?)"}
+    try:
+        w_n0 = _bc_leaf_execute_sql(payload_n0)
+    except Exception as err_n0:
+        raise _bc_op_failed("n0", "fail", err_n0) from err_n0
+    if (not _bc_isinstance(w_n0, _bc_list)):
+        raise _bc_mismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", w_n0)
+    d1 = []
+    for d2 in w_n0:
+        if (not _bc_isinstance(d2, _bc_dict)):
+            raise _bc_mismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", d2)
+        d3 = {}
+        if ("changes" in d2):
+            d3["changes"] = _bc_de_int(d2["changes"], "WriteSummary", "changes", "int")
+        else:
+            raise _bc_missing("WriteSummary", "changes", "int")
+        if ("lastInsertRowid" in d2):
+            d3["lastInsertRowid"] = _bc_de_int(d2["lastInsertRowid"], "WriteSummary", "lastInsertRowid", "int")
+        else:
+            raise _bc_missing("WriteSummary", "lastInsertRowid", "int")
+        d1.append(d3)
+    t_n0 = d1
+    produced_n0 = True
+    return t_n0
+
+
+def rename_notes(rows_id, rows_body):
+    t_n0 = None
+    produced_n0 = False
+    # op 'n0' (executeSQL)
+    payload_n0 = {"opts": {"db": None, "guard": None, "whereDynamic": None, "write": {"returning": False}}, "params": [rows_id, rows_body, 0], "sql": "UPDATE conf_notes AS t SET body = v.body FROM UNNEST(?::bigint[], ?::text[]) AS v(id, body) WHERE t.id = v.id AND (t.archived = ?)"}
+    try:
+        w_n0 = _bc_leaf_execute_sql(payload_n0)
+    except Exception as err_n0:
+        raise _bc_op_failed("n0", "fail", err_n0) from err_n0
+    if (not _bc_isinstance(w_n0, _bc_list)):
+        raise _bc_mismatch("n0", "n0", "arr(obj{changes:int,lastInsertRowid:int})", w_n0)
+    d1 = []
+    for d2 in w_n0:
+        if (not _bc_isinstance(d2, _bc_dict)):
+            raise _bc_mismatch("n0", "n0", "obj{changes:int,lastInsertRowid:int}", d2)
+        d3 = {}
+        if ("changes" in d2):
+            d3["changes"] = _bc_de_int(d2["changes"], "WriteSummary", "changes", "int")
+        else:
+            raise _bc_missing("WriteSummary", "changes", "int")
+        if ("lastInsertRowid" in d2):
+            d3["lastInsertRowid"] = _bc_de_int(d2["lastInsertRowid"], "WriteSummary", "lastInsertRowid", "int")
+        else:
+            raise _bc_missing("WriteSummary", "lastInsertRowid", "int")
+        d1.append(d3)
+    t_n0 = d1
+    produced_n0 = True
+    return t_n0
+
+
 # The components on the native path (declaration order) — each a 1:1 entry <name>(<positional params>).
-COMPONENT_NAMES_NATIVE = ("posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "optionalOnlyFeed", "quotedOrderFeed", "quotedWhereOrderFeed", "viewFeed", "usersWithPosts", "postsWithAuthor", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createDoc", "createLine", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning")
+COMPONENT_NAMES_NATIVE = ("posts", "postsTop", "page", "postsByIds", "feed", "pagedFeed", "optionalOnlyFeed", "quotedOrderFeed", "quotedWhereOrderFeed", "viewFeed", "usersWithPosts", "postsWithAuthor", "notes", "notesByAuthor", "usersWithFilteredRelations", "usersWithCappedPosts", "usersWithUncappedPosts", "usersWithTopPosts", "createPost", "renamePost", "removePost", "createPostReturning", "renamePostReturning", "removePostReturning", "restatusPostsReturning", "removePostsByAuthorReturning", "typedRows", "createTags", "removeTags", "createDoc", "createLine", "createTagsReturning", "relabelTagsReturning", "removeTagsReturning", "renameNote", "removeNote", "removeNotes", "renameNotes")

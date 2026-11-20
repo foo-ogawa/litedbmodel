@@ -6,7 +6,7 @@
 function parentRef(column: ColumnRef): DBParentRef;
 ```
 
-Defined in: [DBValues.ts:643](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBValues.ts#L643)
+Defined in: [DBValues.ts:669](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBValues.ts#L669)
 
 Create a parent table column reference for correlated subqueries.
 

@@ -170,12 +170,25 @@ class ConfUser {
 
   @hasMany(() => [ConfUser.id, ConfPost.author_id], { order: () => ConfPost.id.asc(), limit: 1 })
   declare topPosts: Promise<ConfPost[]>;
+
+  // A relation's OWN conditions, which every surface (v1 lazy load, SCP batch, every generated
+  // module) must AND onto the key set: a declared `where`, and the target model's default filter
+  // (`conf_notes` declares `archived = 0`) — on an unlimited batch and on a per-parent `limit` window.
+  @hasMany(() => [ConfUser.id, ConfPost.author_id], { order: () => ConfPost.id.asc(), where: () => [[ConfPost.status, 'live']] })
+  declare livePosts: Promise<ConfPost[]>;
+
+  @hasMany(() => [ConfUser.id, ConfNote.author_id], { order: () => ConfNote.id.asc() })
+  declare notes: Promise<ConfNote[]>;
+
+  @hasMany(() => [ConfUser.id, ConfNote.author_id], { order: () => ConfNote.id.desc(), limit: 1 })
+  declare latestNote: Promise<ConfNote[]>;
 }
 
 @model('conf_posts')
 class ConfPost {
   declare static id: Column<number, ConfPost>;
   declare static author_id: Column<number, ConfPost>;
+  declare static status: Column<string, ConfPost>;
 
   // The schema is `id INT PRIMARY KEY` — CLIENT-supplied, no AUTO_INCREMENT. Declaring it is what
   // lets a `… RETURNING` write recover its rows by the value it bound (#130).
@@ -203,6 +216,23 @@ class ConfTag {
   @column.text() label?: string;
 }
 
+
+/**
+ * The DEFAULT-FILTER fixture: `@model({ filter })` is auto-applied to every read of the model — a
+ * declared read and a relation batch that targets it alike. The seed archives note 2, so a read that
+ * drops the filter answers with it.
+ */
+@model('conf_notes', { filter: () => [[ConfNote.archived, 0]] })
+class ConfNote {
+  declare static id: Column<number, ConfNote>;
+  declare static author_id: Column<number, ConfNote>;
+  declare static archived: Column<number, ConfNote>;
+
+  @column.number({ primaryKey: true }) id?: number;
+  @column.number() author_id?: number;
+  @column.text() body?: string;
+  @column.number() archived?: number;
+}
 /**
  * The READ-DECODE fixture (#137). Every other model projects only INTEGER / TEXT columns, so the
  * date and boolean arms of the read decode — the ones each runtime resolves through its DRIVER, not
@@ -261,7 +291,7 @@ class ConfLine {
   @column.text() sku?: string;
 }
 
-const MODEL_REGISTRY: Record<string, unknown> = { ConfUser, ConfPost, ConfTag, ConfTyped, ConfDoc, ConfLine };
+const MODEL_REGISTRY: Record<string, unknown> = { ConfUser, ConfPost, ConfTag, ConfTyped, ConfDoc, ConfLine, ConfNote };
 
 /** Model NAME → class, as `relationDeclOf` resolves a relation's target model. */
 const conformanceModels = (name: string): ModelClassLike => MODEL_REGISTRY[name] as ModelClassLike;
@@ -424,6 +454,12 @@ const ENDPOINTS: EndpointSet = {
   },
   /** A belongsTo relation — the single-child nesting shape. */
   postsWithAuthor: { kind: 'read', model: ConfPost, order: 'id ASC', with: ['author'] },
+  /** A read of a model with a default filter — the filter ANDs onto the (here empty) declared WHERE. */
+  notes: { kind: 'read', model: ConfNote, order: 'id ASC' },
+  /** The same filter after a declared, bound predicate. */
+  notesByAuthor: { kind: 'read', model: ConfNote, where: [{ column: 'author_id', op: 'eq', param: 'authorId' }], order: 'id ASC' },
+  /** Relations carrying their own conditions: a declared `where`, and a filtered target with and without `limit`. */
+  usersWithFilteredRelations: { kind: 'read', model: ConfUser, select: ['id', 'name'], order: 'id ASC', with: ['livePosts', 'notes', 'latestNote'] },
   // The relation hard-limit guard TARGETS: the same user page over the three capped relation shapes.
   // The cap is resolved at EMIT (compileRelationOp) and baked onto the child fetch's `guard` port, so
   // which of these throws is decided entirely by the declaration + the config the vector carries.
@@ -557,6 +593,15 @@ const ENDPOINTS: EndpointSet = {
   createTagsReturning: { kind: 'createMany', model: ConfTag, columns: ['id', 'post_id', 'label'], param: 'rows', returning: ['id', 'label'] },
   relabelTagsReturning: { kind: 'updateMany', model: ConfTag, keyColumns: ['id'], columns: ['label'], param: 'rows', returning: ['id', 'label'] },
   removeTagsReturning: { kind: 'deleteMany', model: ConfTag, keyColumn: 'id', param: 'ids', returning: ['id', 'label'] },
+  /**
+   * The default filter on every WRITE that addresses existing rows: a single UPDATE / DELETE, a key-set
+   * DELETE and a batch UPDATE all AND `archived = 0` after their own predicate, so the archived note 2
+   * is never written, whatever key names it.
+   */
+  renameNote: { kind: 'update', model: ConfNote, set: [{ column: 'body', param: 'body' }], where: [{ column: 'id', op: 'eq', param: 'id' }] },
+  removeNote: { kind: 'delete', model: ConfNote, where: [{ column: 'id', op: 'eq', param: 'id' }] },
+  removeNotes: { kind: 'deleteMany', model: ConfNote, keyColumn: 'id', param: 'ids' },
+  renameNotes: { kind: 'updateMany', model: ConfNote, keyColumns: ['id'], columns: ['body'], param: 'rows' },
 };
 
 /**
@@ -564,6 +609,7 @@ const ENDPOINTS: EndpointSet = {
  * the evidence that a divergent result is the dialect SQL diverging, never the fixture.
  */
 export const SCHEMA: readonly string[] = [
+  'DROP TABLE IF EXISTS conf_notes',
   'DROP TABLE IF EXISTS conf_lines',
   'DROP TABLE IF EXISTS conf_docs',
   'DROP TABLE IF EXISTS conf_typed',
@@ -597,6 +643,11 @@ export const SCHEMA: readonly string[] = [
   // column alone observable (it would answer with the seeded line too).
   'CREATE TABLE conf_lines (order_id INT NOT NULL, line_no INT NOT NULL, sku TEXT NOT NULL, PRIMARY KEY (order_id, line_no))',
   "INSERT INTO conf_lines (order_id, line_no, sku) VALUES (10, 1, 'SKU-1')",
+  'CREATE TABLE conf_notes (id INT PRIMARY KEY, author_id INT NOT NULL, body TEXT NOT NULL, archived INT NOT NULL)',
+  "INSERT INTO conf_notes (id, author_id, body, archived) VALUES (1, 1, 'n1', 0)",
+  "INSERT INTO conf_notes (id, author_id, body, archived) VALUES (2, 1, 'n2 archived', 1)",
+  "INSERT INTO conf_notes (id, author_id, body, archived) VALUES (3, 2, 'n3', 0)",
+  "INSERT INTO conf_notes (id, author_id, body, archived) VALUES (4, 3, 'n4 archived', 1)",
 ];
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1081,6 +1132,7 @@ interface ExecCase {
 
 const POSTS_STATE = 'SELECT id, author_id, title, status, created_at FROM conf_posts ORDER BY id';
 const TAGS_STATE = 'SELECT id, post_id, label FROM conf_tags ORDER BY id';
+const NOTES_STATE = 'SELECT id, author_id, body, archived FROM conf_notes ORDER BY id';
 const DOCS_STATE = 'SELECT doc_id, title FROM conf_docs ORDER BY doc_id';
 const LINES_STATE = 'SELECT order_id, line_no, sku FROM conf_lines ORDER BY order_id, line_no';
 
@@ -1148,6 +1200,23 @@ const EXEC_CASES: readonly ExecCase[] = [
     input: {},
     relationFields: { author: ['id', 'name', 'post_count'] },
   },
+  // The default filter (`conf_notes`: `archived = 0`) on a declared read, alone and after a bound
+  // predicate: note 2 (author 1) and note 4 (author 3) are archived and never answer.
+  { id: 'notes: the model default filter applies to a declared read', entry: 'notes', input: {} },
+  { id: 'notesByAuthor: the default filter ANDs after a bound predicate', entry: 'notesByAuthor', input: { authorId: 1 } },
+  {
+    // `livePosts` ANDs its declared `where` (Ada's draft post 11 never answers); `notes` / `latestNote`
+    // AND the target's default filter on an unlimited batch and on a per-parent `limit 1` window — the
+    // window over Ada's notes picks note 1, not the archived (and newer) note 2.
+    id: 'usersWithFilteredRelations: a relation ANDs its where and the target default filter',
+    entry: 'usersWithFilteredRelations',
+    input: {},
+    relationFields: {
+      livePosts: ['id', 'author_id', 'title', 'status', 'created_at'],
+      notes: ['id', 'author_id', 'body', 'archived'],
+      latestNote: ['id', 'author_id', 'body', 'archived'],
+    },
+  },
   {
     id: 'createPost: INSERT persists',
     entry: 'createPost',
@@ -1190,6 +1259,21 @@ const EXEC_CASES: readonly ExecCase[] = [
     dbState: [TAGS_STATE],
   },
   { id: 'removeTagsReturning: batch DELETE … RETURNING returns every removed row', entry: 'removeTagsReturning', input: { ids: [100, 101] }, writes: true, dbState: [TAGS_STATE] },
+  // The default filter on writes: note 2 is archived, so naming it changes nothing (note 1 / 3 are live).
+  { id: 'renameNote: UPDATE leaves a row the default filter excludes', entry: 'renameNote', input: { body: 'renamed', id: 2 }, writes: true, dbState: [NOTES_STATE] },
+  { id: 'renameNote: UPDATE writes a row the default filter admits', entry: 'renameNote', input: { body: 'renamed', id: 1 }, writes: true, dbState: [NOTES_STATE] },
+  { id: 'removeNote: DELETE leaves a row the default filter excludes', entry: 'removeNote', input: { id: 2 }, writes: true, dbState: [NOTES_STATE] },
+  { id: 'removeNotes: batch DELETE removes only the rows the default filter admits', entry: 'removeNotes', input: { ids: [1, 2] }, writes: true, dbState: [NOTES_STATE] },
+  {
+    id: 'renameNotes: batch UPDATE writes only the rows the default filter admits',
+    entry: 'renameNotes',
+    input: (d) =>
+      d === 'postgres'
+        ? { rows_id: [1, 2], rows_body: ['one', 'two'] }
+        : { rows: [{ id: 1, body: 'one' }, { id: 2, body: 'two' }] },
+    writes: true,
+    dbState: [NOTES_STATE],
+  },
   // #130 — a write that DECLARES a RETURNING hands back the rows it wrote, on every dialect. The
   // UPDATE's row carries its NEW title (it is described after the write); the DELETE's is the
   // pre-image (described before it), and `dbState` proves the delete still happened.

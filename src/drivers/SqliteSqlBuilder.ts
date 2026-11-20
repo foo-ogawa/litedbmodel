@@ -12,6 +12,7 @@ import type {
   FindByPkeysOptions,
   SqlBuildResult,
 } from './types';
+import { takeScope } from './types';
 import { castToJson } from './SqliteHelper';
 import { DBToken } from '../DBValues';
 
@@ -160,6 +161,7 @@ export const sqliteSqlBuilder: SqlBuilder = {
       records,
       skipMap = new Map(),
       returning,
+      scope,
     } = options;
 
     // SQLite uses CASE WHEN for batch updates
@@ -223,7 +225,8 @@ export const sqliteSqlBuilder: SqlBuilder = {
       }
     }
     
-    let sql = `UPDATE ${tableName} SET ${setClauses.join(', ')} WHERE ${whereClause}`;
+    const filter = takeScope(scope, params);
+    let sql = `UPDATE ${tableName} SET ${setClauses.join(', ')} WHERE ${whereClause}${filter === '' ? '' : ` AND ${filter}`}`;
 
     if (returning) {
       sql += ` RETURNING ${returning}`;
@@ -233,14 +236,15 @@ export const sqliteSqlBuilder: SqlBuilder = {
   },
 
   buildFindByPkeys(options: FindByPkeysOptions): SqlBuildResult {
-    const { tableName, pkeyColumns, pkeyValues, selectColumn } = options;
+    const { tableName, pkeyColumns, pkeyValues, selectColumn, scope } = options;
     const params: unknown[] = [];
 
     if (pkeyColumns.length === 1) {
       // Single PK: WHERE id IN (?, ?, ...)
       const placeholders = pkeyValues.map(() => '?').join(', ');
       params.push(...pkeyValues.map(v => v[0]));
-      const sql = `SELECT ${selectColumn} FROM ${tableName} WHERE ${pkeyColumns[0]} IN (${placeholders})`;
+      const filter = takeScope(scope, params);
+      const sql = `SELECT ${selectColumn} FROM ${tableName} WHERE ${pkeyColumns[0]} IN (${placeholders})${filter === '' ? '' : ` AND ${filter}`}`;
       return { sql, params };
     }
 
@@ -253,9 +257,10 @@ export const sqliteSqlBuilder: SqlBuilder = {
     }
     const onConditions = pkeyColumns.map(col => `t.${col} = v.${col}`).join(' AND ');
     const selectCol = selectColumn === '*' ? 't.*' : selectColumn;
+    const filter = takeScope(scope, params, 't');
     const sql = `WITH v(${pkeyColumns.join(', ')}) AS (VALUES ${rowPlaceholders.join(', ')}) ` +
           `SELECT ${selectCol} FROM ${tableName} AS t ` +
-          `JOIN v ON ${onConditions}`;
+          `JOIN v ON ${onConditions}${filter === '' ? '' : ` WHERE ${filter}`}`;
     return { sql, params };
   },
 

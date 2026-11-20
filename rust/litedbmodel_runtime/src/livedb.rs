@@ -162,6 +162,35 @@ pub struct PostgresDriver {
     _idle_reaper: IdleReaper,
 }
 
+/// The pool config [`PostgresDriver::connect`] builds from a libpq-style conn string. The conn
+/// string's `sslmode` carries over: the pool connects without a TLS connector, so `sslmode=require`
+/// makes every connect fail rather than fall back to an unencrypted session.
+fn pg_pool_config(conn: &str) -> Result<PgConfig, SqlFailure> {
+    let pg_conf: tokio_postgres::Config = conn
+        .parse()
+        .map_err(|e| driver_failure(format!("postgres conn parse: {e}")))?;
+    let mut cfg = PgConfig::new();
+    cfg.host = pg_conf.get_hosts().first().map(|h| match h {
+        tokio_postgres::config::Host::Tcp(s) => s.clone(),
+        #[cfg(unix)]
+        tokio_postgres::config::Host::Unix(p) => p.to_string_lossy().into_owned(),
+    });
+    cfg.port = pg_conf.get_ports().first().copied();
+    cfg.user = pg_conf.get_user().map(str::to_string);
+    cfg.password = pg_conf
+        .get_password()
+        .map(|p| String::from_utf8_lossy(p).into_owned());
+    cfg.dbname = pg_conf.get_dbname().map(str::to_string);
+    cfg.options = pg_conf.get_options().map(str::to_string);
+    cfg.ssl_mode = Some(match pg_conf.get_ssl_mode() {
+        tokio_postgres::config::SslMode::Disable => deadpool_postgres::SslMode::Disable,
+        tokio_postgres::config::SslMode::Prefer => deadpool_postgres::SslMode::Prefer,
+        // `Require`, and any stricter mode a later tokio-postgres adds: never an unencrypted session.
+        _ => deadpool_postgres::SslMode::Require,
+    });
+    Ok(cfg)
+}
+
 impl PostgresDriver {
     /// Connect with a libpq-style conn string, e.g.
     /// "host=localhost port=5433 user=testuser password=testpass dbname=testdb".
@@ -177,22 +206,7 @@ impl PostgresDriver {
             .build()
             .map_err(|e| driver_failure(format!("postgres runtime: {e}")))?;
 
-        let pg_conf: tokio_postgres::Config = conn
-            .parse()
-            .map_err(|e| driver_failure(format!("postgres conn parse: {e}")))?;
-        let mut cfg = PgConfig::new();
-        cfg.host = pg_conf.get_hosts().first().map(|h| match h {
-            tokio_postgres::config::Host::Tcp(s) => s.clone(),
-            #[cfg(unix)]
-            tokio_postgres::config::Host::Unix(p) => p.to_string_lossy().into_owned(),
-        });
-        cfg.port = pg_conf.get_ports().first().copied();
-        cfg.user = pg_conf.get_user().map(str::to_string);
-        cfg.password = pg_conf
-            .get_password()
-            .map(|p| String::from_utf8_lossy(p).into_owned());
-        cfg.dbname = pg_conf.get_dbname().map(str::to_string);
-        cfg.options = pg_conf.get_options().map(str::to_string);
+        let cfg = pg_pool_config(conn)?;
         Self::assemble(
             rt,
             cfg,
@@ -2426,6 +2440,26 @@ mod tests {
     use super::*;
     use tokio_postgres::types::private::BytesMut;
     use tokio_postgres::types::{FromSql, IsNull};
+
+    #[test]
+    fn pg_pool_config_keeps_the_conn_string_sslmode() {
+        let base = "host=localhost port=5433 user=u password=p dbname=d";
+        let mode = |extra: &str| pg_pool_config(&format!("{base}{extra}")).unwrap().ssl_mode;
+        assert_eq!(
+            mode(" sslmode=require"),
+            Some(deadpool_postgres::SslMode::Require)
+        );
+        assert_eq!(
+            mode(" sslmode=disable"),
+            Some(deadpool_postgres::SslMode::Disable)
+        );
+        assert_eq!(
+            mode(" sslmode=prefer"),
+            Some(deadpool_postgres::SslMode::Prefer)
+        );
+        // libpq's default when the conn string names none.
+        assert_eq!(mode(""), Some(deadpool_postgres::SslMode::Prefer));
+    }
 
     /// Encode `p` for a parameter of type `ty` through `to_sql_checked` — the entry tokio-postgres
     /// calls when it builds the Bind message — returning the wire bytes, `None` for a NULL.

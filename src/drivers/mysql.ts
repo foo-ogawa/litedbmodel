@@ -69,10 +69,33 @@ function getMysql2Module(): Mysql2Module {
 }
 
 /**
- * Get pool cache key from config
+ * The options a pool is constructed from — the ONE derivation both the pool and its cache key read.
+ */
+function poolOptions(config: DBConfig): Parameters<Mysql2Module['createPool']>[0] {
+  return {
+    host: config.host,
+    port: config.port,
+    database: config.database,
+    user: config.user,
+    password: config.password,
+    waitForConnections: true,
+    connectionLimit: config.max || 10,
+    connectTimeout: (config.timeout || 30) * 1000,
+    idleTimeout: config.idleTimeoutMillis ?? 10000,
+    // Read de-box (issue #9): make BIGINT arrive as an exact string (else mysql2 rounds it to a JS
+    // number past 2^53) and the DATE/TIMESTAMP/DATETIME family arrive as its native textual string
+    // (else a TZ-shifted JS Date) — the coercible forms `materializeCell` (int64/date) expects. Same
+    // options the v2 SCP pool-executor sets (`mysqlDeboxPoolOptions`).
+    ...mysqlDeboxPoolOptions,
+  };
+}
+
+/**
+ * Get pool cache key from config: every option the pool is built from (the credentials included), so two
+ * configs share a pool only when they would build the same one.
  */
 function getPoolKey(config: DBConfig): string {
-  return `${config.host}:${config.port}/${config.database}`;
+  return JSON.stringify(poolOptions(config));
 }
 
 /**
@@ -84,22 +107,7 @@ function getPool(config: DBConfig): Mysql2Pool {
   let pool = pools.get(key);
   if (!pool) {
     const mysql2 = getMysql2Module();
-    pool = mysql2.createPool({
-      host: config.host,
-      port: config.port,
-      database: config.database,
-      user: config.user,
-      password: config.password,
-      waitForConnections: true,
-      connectionLimit: config.max || 10,
-      connectTimeout: (config.timeout || 30) * 1000,
-      idleTimeout: config.idleTimeoutMillis ?? 10000,
-      // Read de-box (issue #9): make BIGINT arrive as an exact string (else mysql2 rounds it to a JS
-      // number past 2^53) and the DATE/TIMESTAMP/DATETIME family arrive as its native textual string
-      // (else a TZ-shifted JS Date) — the coercible forms `materializeCell` (int64/date) expects. Same
-      // options the v2 SCP pool-executor sets (`mysqlDeboxPoolOptions`).
-      ...mysqlDeboxPoolOptions,
-    });
+    pool = mysql2.createPool(poolOptions(config));
     pools.set(key, pool);
   }
 

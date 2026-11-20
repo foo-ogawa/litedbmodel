@@ -5,6 +5,48 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.3.1] - 2026-11-20
+
+**条件の組み立て・値の埋め込み・接続の設定・公開の workflow の欠陥を修正した。**
+
+### Fixed
+
+- 条件の配列に同じキーの要素（2 個目の `or()`・同じ列の 2 個目の条件・2 個目の `exists()` など）があると、前の要素が
+  WHERE から消えていた。各要素を AND の 1 項として保持する。relation の条件の結合と、SCP の宣言 endpoint の条件の
+  組み立ても同じ規則に揃えた。
+- `?` を含む条件のキーで、値の数がキーの `?` の数と異なる場合に、後ろの条件の値が別の `?` に束縛されていた。
+  数が一致しない場合は例外を送出する。値が `true`・`false`・`null` の場合と、`sql` タグに boolean を埋め込んだ場合も、
+  値を `?` に束縛する。
+- `DBModel.groupByProperty` が、値が `constructor`・`__proto__` の行で例外を送出し、`hashByProperty` が値が
+  `__proto__` の行を落としていた。
+- 対象のモデルが `@model({ filter })` を持つ場合に、`limit` 付きの hasMany の読み込みだけ filter が適用されていなかった。
+- SCP の宣言 endpoint の生成物（5 言語）の relation が、relation の `where` と対象のモデルの `@model({ filter })` を適用していなかった。
+- `litedbmodel/drivers` の JSON の補助関数（SQLite の `jsonStringArray`・`jsonObject`・`jsonIntArray`、MySQL の
+  `mysqlJson*`）が、値を SQL の文字列の規則で encode せずに文面へ埋め込んでいた。SQLite は `'` を二重化し、MySQL は
+  UTF-8 の 16 進の literal として埋め込む。数値の補助関数（`pgIntArray`・`pgNumericArray`・`*TimeAfter`・`*DayAfter`）は、
+  有限の数でない値を例外とする。
+- v1 の driver（PostgreSQL・MySQL）の接続プールの cache が `host:port/database` だけを key にしており、user・password の
+  異なる設定（`writerConfig` など）が最初の設定の接続プールを共有していた。接続プールを作る設定の全項目を key にする。
+- rust の `PostgresDriver::connect` が、接続文字列の `sslmode` を接続プールの設定に写していなかった。`sslmode=require`
+  を指定した場合に、TLS なしで接続していた。指定を写し、TLS で接続できない場合は接続を失敗とする。
+- php の `routedTransaction` が、接続プールの session の設定（`queryTimeout`・`searchPath`・`charset`）を適用せずに
+  transaction を実行していた。transaction の接続を writer の接続プールから取り出し、終了時に session の設定を戻す。
+- 公開の workflow（npm・PyPI・crates.io）の `workflow_run` の起動の条件が、起動元の run がこのリポの `release.yml` で
+  あることを確認していなかった。起動元の event・リポジトリ・workflow の path を確認する。
+- `npm-audit-remediate.yml` が、依存を導入・実行する段と、書き込みの権限で push・issue の作成を行う段を、同じ job で
+  実行していた。依存を実行する job を読み取りの権限だけにし、push・issue の作成を別の job に分けた。書き込みの job は
+  lockfile 以外の変更を含む差分を適用しない。
+
+### Changed
+
+- **`@model({ filter })` を、モデルの既存の行を対象にする全ての操作に適用する。** `find`・`findOne`・`count` に加えて、`findById`・`update`・`delete`・`updateMany`、対象のモデルへの relation の読み込み、SCP の宣言 endpoint の生成物（read・update・delete・`updateMany`・`deleteMany`）にも適用する。操作の自身の条件の後ろに 1 つの括弧の組として AND で加える。`update`・`delete` は、filter を除いた自身の条件が無ければ従来どおり例外とする。`create`・`createMany`・upsert・生の SQL・`exists()`／`inSubquery()` の副問い合わせには適用しない。
+  - 従来は `find`・`findOne`・`count`・limit の無い relation の読み込みだけに適用していた。`findById`・`update`・`delete`・`updateMany` で filter の外の行を読み書きしていた利用者は、挙動が変わる。
+  - MySQL の宣言 endpoint の `updateMany` を `returning` 付きで宣言し、対象のモデルが filter を持つ場合は、生成の時に誤りとする（書き込んだ行だけを正しく返せないため）。
+
+### Removed
+
+- 未使用の devDependencies の `terser` と、rust の workspace の未使用の依存の宣言（`serde`・`serde_json`）を削除した。
+
 ## [2.3.0] - 2026-11-17
 
 **python / php の生成モジュールを native のコードに切り替えた。** 生成モジュールは behavior-contracts の

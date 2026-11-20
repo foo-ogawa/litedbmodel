@@ -6,7 +6,7 @@
 function dbIn(values: unknown[]): DBArrayValue;
 ```
 
-Defined in: [DBValues.ts:373](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBValues.ts#L373)
+Defined in: [DBValues.ts:399](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBValues.ts#L399)
 
 Create an array value for IN clause
 

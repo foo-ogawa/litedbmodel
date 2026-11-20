@@ -341,7 +341,9 @@ final class DynamicWhereTest extends TestCase
             $read();
         });
 
-        self::assertSame(['reader', 'writer:tx', 'writer'], $log->getArrayCopy());
+        // The tx pins the writer (`writer:tx`) and checks its connection out of it ONCE (`writer`, which
+        // applies the pool's session config); the in-body statements check out nothing more.
+        self::assertSame(['reader', 'writer:tx', 'writer', 'writer'], $log->getArrayCopy());
         self::assertSame([
             'SELECT id FROM users',
             'BEGIN',
@@ -635,7 +637,7 @@ final class DynamicWhereTest extends TestCase
         }, null, 'sqlite');
         // The transcript, READ rather than merely wired: the tx took ONE connection out of A (the default,
         // which is what it opened on) and the two REJECTED statements reached no pool at all.
-        self::assertSame(['A:tx'], $log->getArrayCopy(), 'ONE checkout, on the default; the rejected statements reached no pool');
+        self::assertSame(['A:tx', 'A'], $log->getArrayCopy(), 'the tx pins the default and checks out of it ONCE; the rejected statements reached no pool');
 
         // A transaction on "B": the statement naming "B" AGREES and runs on the pin — the rows are
         // unforgeable (`named_users` exists in NO other registered db) — the UNNAMED one does too, and
@@ -654,9 +656,9 @@ final class DynamicWhereTest extends TestCase
                 $failure(static fn () => $read($tx, 'default')),
             );
         }, null, 'sqlite', 'B');
-        // …and the B transaction added exactly ONE more checkout, on B: both AGREEING statements were
+        // …and the B transaction pinned B and checked out of it exactly ONCE: both AGREEING statements were
         // served by that one pinned connection, and the rejected one reached no pool.
-        self::assertSame(['A:tx', 'B:tx'], $log->getArrayCopy(), 'ONE checkout per tx, each on its own db');
+        self::assertSame(['A:tx', 'A', 'B:tx', 'B'], $log->getArrayCopy(), 'ONE checkout per tx, each on its own db');
     }
 
     /**
@@ -792,7 +794,7 @@ final class DynamicWhereTest extends TestCase
         // ONE checkout for the whole transaction, on B — `RecordingPdoPool::backingDriver()` records the
         // tx's own acquire and `acquire()` would record any per-statement one. So the derivation did not
         // turn an in-body statement into a second connection, and nothing was taken from the default.
-        self::assertSame(['B:tx'], $log->getArrayCopy(), 'ONE checkout for the whole tx, on B');
+        self::assertSame(['B:tx', 'B'], $log->getArrayCopy(), 'the tx pins B and checks out of it ONCE for the whole tx');
     }
 }
 

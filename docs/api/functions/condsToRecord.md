@@ -3,10 +3,10 @@
 # Function: condsToRecord()
 
 ```ts
-function condsToRecord(conditions: Conds, typeCast?: DriverTypeCast): Record<string, unknown>;
+function condsToRecord(conditions: Conds, typeCast?: DriverTypeCast, qualifier?: string): Record<string, unknown>;
 ```
 
-Defined in: [Column.ts:1044](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L1044)
+Defined in: [Column.ts:1047](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L1047)
 
 ## Parameters
 
@@ -14,6 +14,7 @@ Defined in: [Column.ts:1044](https://github.com/foo-ogawa/litedbmodel/blob/main/
 | ------ | ------ |
 | `conditions` | `Conds` |
 | `typeCast?` | `DriverTypeCast` |
+| `qualifier?` | `string` |
 
 ## Returns
 

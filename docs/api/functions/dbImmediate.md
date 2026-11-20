@@ -6,7 +6,7 @@
 function dbImmediate(value: string): DBImmediateValue;
 ```
 
-Defined in: [DBValues.ts:394](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBValues.ts#L394)
+Defined in: [DBValues.ts:420](https://github.com/foo-ogawa/litedbmodel/blob/main/src/DBValues.ts#L420)
 
 Create an immediate value (literal, no binding)
 

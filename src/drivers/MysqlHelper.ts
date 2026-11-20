@@ -4,7 +4,7 @@
  * Provides type conversion utilities and MySQL-specific helpers.
  */
 
-import { DBImmediateValue } from '../DBValues';
+import { DBImmediateValue, numberText } from '../DBValues';
 
 // ============================================
 // Type Casting: DB -> TypeScript
@@ -155,24 +155,34 @@ export function False(): DBImmediateValue {
 // ============================================
 
 /**
+ * The JSON text of `val` as a MySQL JSON value. A quoted literal's escaping depends on the server's
+ * sql_mode (`\` is an escape unless NO_BACKSLASH_ESCAPES), so the text travels as a hexadecimal literal
+ * of its UTF-8 bytes, which no sql_mode reads differently and no value can close.
+ */
+function jsonLiteral(val: unknown): DBImmediateValue {
+  const hex = Buffer.from(JSON.stringify(val), 'utf8').toString('hex');
+  return new DBImmediateValue(`CAST(CONVERT(X'${hex}' USING utf8mb4) AS JSON)`);
+}
+
+/**
  * Generate MySQL JSON array from integers
  */
 export function jsonIntArray(val: number[]): DBImmediateValue {
-  return new DBImmediateValue(`CAST('${JSON.stringify(val)}' AS JSON)`);
+  return jsonLiteral(val);
 }
 
 /**
  * Generate MySQL JSON array from strings
  */
 export function jsonStringArray(val: string[]): DBImmediateValue {
-  return new DBImmediateValue(`CAST('${JSON.stringify(val)}' AS JSON)`);
+  return jsonLiteral(val);
 }
 
 /**
  * Generate MySQL JSON object
  */
 export function jsonObject(val: Record<string, unknown>): DBImmediateValue {
-  return new DBImmediateValue(`CAST('${JSON.stringify(val)}' AS JSON)`);
+  return jsonLiteral(val);
 }
 
 // ============================================
@@ -186,14 +196,14 @@ export function TimeAfter(
   val: number,
   interval: 'SECOND' | 'MINUTE' | 'HOUR' | 'DAY'
 ): DBImmediateValue {
-  return new DBImmediateValue(`DATE_ADD(NOW(), INTERVAL ${val} ${interval})`);
+  return new DBImmediateValue(`DATE_ADD(NOW(), INTERVAL ${numberText(val, 'TimeAfter value')} ${interval})`);
 }
 
 /**
  * Generate date after current date
  */
 export function DayAfter(val: number): DBImmediateValue {
-  return new DBImmediateValue(`DATE_ADD(CURDATE(), INTERVAL ${val} DAY)`);
+  return new DBImmediateValue(`DATE_ADD(CURDATE(), INTERVAL ${numberText(val, 'DayAfter value')} DAY)`);
 }
 
 // ============================================

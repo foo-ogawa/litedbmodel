@@ -4,7 +4,7 @@
  * Provides type conversion utilities and SQLite-specific helpers.
  */
 
-import { DBImmediateValue } from '../DBValues';
+import { DBImmediateValue, escapeSqlQuotes, numberText } from '../DBValues';
 
 // ============================================
 // Type Casting: DB -> TypeScript
@@ -164,25 +164,30 @@ export function False(): DBImmediateValue {
 // SQLite Array/JSON Helpers
 // ============================================
 
+/** The JSON text of `val` as a SQLite string literal (every `'` doubled, so a value cannot close it). */
+function jsonLiteral(val: unknown): DBImmediateValue {
+  return new DBImmediateValue(`'${escapeSqlQuotes(JSON.stringify(val))}'`);
+}
+
 /**
  * Generate SQLite JSON array from integers
  */
 export function jsonIntArray(val: number[]): DBImmediateValue {
-  return new DBImmediateValue(`'${JSON.stringify(val)}'`);
+  return jsonLiteral(val);
 }
 
 /**
  * Generate SQLite JSON array from strings
  */
 export function jsonStringArray(val: string[]): DBImmediateValue {
-  return new DBImmediateValue(`'${JSON.stringify(val)}'`);
+  return jsonLiteral(val);
 }
 
 /**
  * Generate SQLite JSON object
  */
 export function jsonObject(val: Record<string, unknown>): DBImmediateValue {
-  return new DBImmediateValue(`'${JSON.stringify(val)}'`);
+  return jsonLiteral(val);
 }
 
 // ============================================
@@ -196,14 +201,14 @@ export function TimeAfter(
   val: number,
   interval: 'seconds' | 'minutes' | 'hours' | 'days'
 ): DBImmediateValue {
-  return new DBImmediateValue(`datetime('now', '+${val} ${interval}')`);
+  return new DBImmediateValue(`datetime('now', '+${numberText(val, 'TimeAfter value')} ${interval}')`);
 }
 
 /**
  * Generate date after current date
  */
 export function DayAfter(val: number): DBImmediateValue {
-  return new DBImmediateValue(`date('now', '+${val} days')`);
+  return new DBImmediateValue(`date('now', '+${numberText(val, 'DayAfter value')} days')`);
 }
 
 // ============================================

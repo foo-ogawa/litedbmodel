@@ -2,7 +2,7 @@
 
 # Interface: Column\<ValueType, ModelType\>
 
-Defined in: [Column.ts:145](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L145)
+Defined in: [Column.ts:146](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L146)
 
 Type-safe column reference as a callable function.
 
@@ -19,7 +19,7 @@ Type-safe column reference as a callable function.
 (): string;
 ```
 
-Defined in: [Column.ts:147](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L147)
+Defined in: [Column.ts:148](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L148)
 
 Call to get column name as string (for computed property keys)
 
@@ -31,14 +31,14 @@ Call to get column name as string (for computed property keys)
 
 | Property | Type | Description | Defined in |
 | ------ | ------ | ------ | ------ |
-| <a id="columnname"></a> `columnName` (readonly) | `string` | The database column name | [Column.ts:150](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L150) |
-| <a id="propertyname"></a> `propertyName` (readonly) | `string` | The property name on the model class (may differ from columnName) | [Column.ts:153](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L153) |
-| <a id="tablename"></a> `tableName` (readonly) | `string` | The database table name | [Column.ts:156](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L156) |
-| <a id="modelname"></a> `modelName` (readonly) | `string` | The model class name (for debugging and static analysis) | [Column.ts:159](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L159) |
-| <a id="_brand"></a> `_brand` (readonly) | `'Column'` | Brand for type discrimination - enables static analysis to distinguish from regular variables | [Column.ts:162](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L162) |
-| <a id="sqlcast"></a> `sqlCast?` (readonly) | `string` | SQL type for automatic casting in conditions (e.g., 'uuid') | [Column.ts:165](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L165) |
-| <a id="serialize"></a> `serialize?` (readonly) | `(value: unknown, typeCast?: DriverTypeCast) => unknown` | The column family's serializer: a condition value binds exactly as a written value does | [Column.ts:168](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L168) |
-| <a id="__model"></a> `__model?` (readonly) | `ModelType` | Phantom type for model association (compile-time only, not used at runtime) | [Column.ts:171](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L171) |
+| <a id="columnname"></a> `columnName` (readonly) | `string` | The database column name | [Column.ts:151](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L151) |
+| <a id="propertyname"></a> `propertyName` (readonly) | `string` | The property name on the model class (may differ from columnName) | [Column.ts:154](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L154) |
+| <a id="tablename"></a> `tableName` (readonly) | `string` | The database table name | [Column.ts:157](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L157) |
+| <a id="modelname"></a> `modelName` (readonly) | `string` | The model class name (for debugging and static analysis) | [Column.ts:160](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L160) |
+| <a id="_brand"></a> `_brand` (readonly) | `'Column'` | Brand for type discrimination - enables static analysis to distinguish from regular variables | [Column.ts:163](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L163) |
+| <a id="sqlcast"></a> `sqlCast?` (readonly) | `string` | SQL type for automatic casting in conditions (e.g., 'uuid') | [Column.ts:166](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L166) |
+| <a id="serialize"></a> `serialize?` (readonly) | `(value: unknown, typeCast?: DriverTypeCast) => unknown` | The column family's serializer: a condition value binds exactly as a written value does | [Column.ts:169](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L169) |
+| <a id="__model"></a> `__model?` (readonly) | `ModelType` | Phantom type for model association (compile-time only, not used at runtime) | [Column.ts:172](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L172) |
 
 ## Methods
 
@@ -48,7 +48,7 @@ Call to get column name as string (for computed property keys)
 eq(value: ValueType): Record<string, ValueType | DBCast>;
 ```
 
-Defined in: [Column.ts:181](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L181)
+Defined in: [Column.ts:182](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L182)
 
 Equal condition (column = value)
 
@@ -74,7 +74,7 @@ User.id.eq(1) → { id: 1 }
 ne(value: ValueType): Record<string, ValueType | DBCast>;
 ```
 
-Defined in: [Column.ts:187](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L187)
+Defined in: [Column.ts:188](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L188)
 
 Not equal condition (column != value)
 
@@ -100,7 +100,7 @@ User.status.ne('deleted') → { 'status != ?': 'deleted' }
 gt(value: ValueType): Record<string, ValueType | DBCast>;
 ```
 
-Defined in: [Column.ts:193](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L193)
+Defined in: [Column.ts:194](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L194)
 
 Greater than condition (column > value)
 
@@ -126,7 +126,7 @@ User.age.gt(18) → { 'age > ?': 18 }
 gte(value: ValueType): Record<string, ValueType | DBCast>;
 ```
 
-Defined in: [Column.ts:199](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L199)
+Defined in: [Column.ts:200](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L200)
 
 Greater than or equal condition (column >= value)
 
@@ -152,7 +152,7 @@ User.age.gte(18) → { 'age >= ?': 18 }
 lt(value: ValueType): Record<string, ValueType | DBCast>;
 ```
 
-Defined in: [Column.ts:205](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L205)
+Defined in: [Column.ts:206](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L206)
 
 Less than condition (column < value)
 
@@ -178,7 +178,7 @@ User.age.lt(65) → { 'age < ?': 65 }
 lte(value: ValueType): Record<string, ValueType | DBCast>;
 ```
 
-Defined in: [Column.ts:211](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L211)
+Defined in: [Column.ts:212](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L212)
 
 Less than or equal condition (column <= value)
 
@@ -204,7 +204,7 @@ User.age.lte(65) → { 'age <= ?': 65 }
 like(pattern: string): Record<string, string>;
 ```
 
-Defined in: [Column.ts:217](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L217)
+Defined in: [Column.ts:218](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L218)
 
 LIKE condition (column LIKE pattern)
 
@@ -230,7 +230,7 @@ User.name.like('%test%') → { 'name LIKE ?': '%test%' }
 notLike(pattern: string): Record<string, string>;
 ```
 
-Defined in: [Column.ts:223](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L223)
+Defined in: [Column.ts:224](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L224)
 
 NOT LIKE condition (column NOT LIKE pattern)
 
@@ -256,7 +256,7 @@ User.name.notLike('%test%') → { 'name NOT LIKE ?': '%test%' }
 ilike(pattern: string): Record<string, string>;
 ```
 
-Defined in: [Column.ts:229](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L229)
+Defined in: [Column.ts:230](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L230)
 
 ILIKE condition (case-insensitive LIKE, PostgreSQL specific)
 
@@ -282,7 +282,7 @@ User.name.ilike('%TEST%') → { 'name ILIKE ?': '%TEST%' }
 between(from: ValueType, to: ValueType): Record<string, [ValueType, ValueType]>;
 ```
 
-Defined in: [Column.ts:235](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L235)
+Defined in: [Column.ts:236](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L236)
 
 BETWEEN condition (column BETWEEN from AND to)
 
@@ -309,7 +309,7 @@ User.age.between(18, 65) → { 'age BETWEEN ? AND ?': [18, 65] }
 in(values: ValueType[]): Record<string, ValueType[] | DBCastArray>;
 ```
 
-Defined in: [Column.ts:242](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L242)
+Defined in: [Column.ts:243](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L243)
 
 IN condition (column IN (values))
 Note: Arrays are automatically converted to IN clause by litedbmodel
@@ -336,7 +336,7 @@ User.status.in(['active', 'pending']) → { status: ['active', 'pending'] }
 notIn(values: ValueType[]): Record<string, ValueType[] | DBCastArray>;
 ```
 
-Defined in: [Column.ts:248](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L248)
+Defined in: [Column.ts:249](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L249)
 
 NOT IN condition (column NOT IN (values))
 
@@ -362,7 +362,7 @@ User.status.notIn(['deleted', 'banned'])
 isNull(): Record<string, null>;
 ```
 
-Defined in: [Column.ts:254](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L254)
+Defined in: [Column.ts:255](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L255)
 
 IS NULL condition
 
@@ -382,7 +382,7 @@ User.deleted_at.isNull() → { deleted_at: null }
 isNotNull(): Record<string, DBNotNullValue>;
 ```
 
-Defined in: [Column.ts:260](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L260)
+Defined in: [Column.ts:261](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L261)
 
 IS NOT NULL condition
 
@@ -402,7 +402,7 @@ User.email.isNotNull() → { email: DBNotNullValue }
 asc(): OrderColumn<ModelType>;
 ```
 
-Defined in: [Column.ts:270](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L270)
+Defined in: [Column.ts:271](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L271)
 
 Ascending order
 
@@ -422,7 +422,7 @@ User.created_at.asc() → OrderColumn('created_at', 'ASC')
 desc(): OrderColumn<ModelType>;
 ```
 
-Defined in: [Column.ts:276](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L276)
+Defined in: [Column.ts:277](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L277)
 
 Descending order
 
@@ -442,7 +442,7 @@ User.created_at.desc() → OrderColumn('created_at', 'DESC')
 ascNullsFirst(): OrderColumn<ModelType>;
 ```
 
-Defined in: [Column.ts:282](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L282)
+Defined in: [Column.ts:283](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L283)
 
 Ascending order with NULLS FIRST
 
@@ -462,7 +462,7 @@ User.updated_at.ascNullsFirst() → OrderColumn with NULLS FIRST
 ascNullsLast(): OrderColumn<ModelType>;
 ```
 
-Defined in: [Column.ts:288](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L288)
+Defined in: [Column.ts:289](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L289)
 
 Ascending order with NULLS LAST
 
@@ -482,7 +482,7 @@ User.updated_at.ascNullsLast() → OrderColumn with NULLS LAST
 descNullsFirst(): OrderColumn<ModelType>;
 ```
 
-Defined in: [Column.ts:294](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L294)
+Defined in: [Column.ts:295](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L295)
 
 Descending order with NULLS FIRST
 
@@ -502,7 +502,7 @@ User.updated_at.descNullsFirst() → OrderColumn with NULLS FIRST
 descNullsLast(): OrderColumn<ModelType>;
 ```
 
-Defined in: [Column.ts:300](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L300)
+Defined in: [Column.ts:301](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L301)
 
 Descending order with NULLS LAST
 
@@ -522,7 +522,7 @@ User.updated_at.descNullsLast() → OrderColumn with NULLS LAST
 toString(): string;
 ```
 
-Defined in: [Column.ts:310](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L310)
+Defined in: [Column.ts:311](https://github.com/foo-ogawa/litedbmodel/blob/main/src/Column.ts#L311)
 
 Returns column name (for template literals)
 

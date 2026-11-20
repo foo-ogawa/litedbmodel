@@ -48,6 +48,8 @@ import {
   resolvePgArrayCast,
 } from './makesql/compile-relation';
 import { pgTypeSpecimen } from './makesql/tx';
+import { compileWhere } from './makesql/compile';
+import type { ConditionObject } from '../DBConditions';
 
 /** A read relation cardinality (v1 parity). `belongsTo`/`hasOne` are single; `hasMany` many. */
 export type RelationKind = 'belongsTo' | 'hasMany' | 'hasOne';
@@ -111,6 +113,13 @@ export interface RelationDecl {
    * driver by name.
    */
   readonly connection?: string;
+  /**
+   * The relation's own CONDITIONS: the relation's `where` (`@hasMany(…, { where })`) AND the target
+   * model's default filter (`@model({ filter })`) — v1 `LazyRelation` applies both to every batch it
+   * loads. Constant values (they come from the declaration, not the request): they bind AFTER the key
+   * set, as {@link RelationOp.conditionParams}. Absent ⇒ the key membership alone (byte-unchanged).
+   */
+  readonly conditions?: ConditionObject;
 }
 
 /**
@@ -151,9 +160,16 @@ export interface RelationOp {
    * every dialect and arity: single-key as the scalar set (PG `= ANY(?::t[])` / MySQL·SQLite
    * single-JSON), composite as the ONE array-of-tuples JSON param every dialect expands server-side
    * (PG `json_array_elements`, MySQL `JSON_TABLE`, SQLite `json_each`). Value-length-independent, so
-   * `sql` is fixed — and the key set is exactly the ONE array the `pluck` leaf yields.
+   * `sql` is fixed — and the key set is exactly the ONE array the `pluck` leaf yields. It binds FIRST; the
+   * relation's own conditions (if any) bind after it, as {@link conditionParams}.
    */
   readonly sql: string;
+  /**
+   * The bound values of the relation's {@link RelationDecl.conditions}, in the order their `?`s follow
+   * the key set's in {@link sql}: a batch binds `[keys, ...conditionParams]` on every dialect and
+   * arity (the key set is always the FIRST param). Absent ⇒ the batch binds the key set alone.
+   */
+  readonly conditionParams?: readonly unknown[];
   /**
    * The child (target) table + projected columns (issue #59) — carried for diagnostics, as the basis
    * of the baked `materializers` map, and as the capped relation's IDENTITY in {@link relationGuard}.
@@ -218,7 +234,8 @@ export function compileRelationOp(decl: RelationDecl, resolveColumnType?: Column
   }
   const dialect: Dialect = decl.dialect ?? 'sqlite';
   const composite = isCompositeDecl(decl);
-  const sql = compiledBatchSql(decl, dialect, resolveColumnType);
+  const { sql, conditionParams } = compiledBatchSql(decl, dialect, resolveColumnType);
+  const bound = conditionParams.length > 0 ? { conditionParams } : {};
   // CROSS-DB (V0 R1): carry the target connection tag ONLY when set (a same-DB relation stays
   // untagged, so existing bundles are byte-unchanged — the field is additive/optional).
   const conn = decl.connection !== undefined ? { connection: decl.connection } : {};
@@ -269,6 +286,7 @@ export function compileRelationOp(decl: RelationDecl, resolveColumnType?: Column
       dialect,
       ...conn,
       sql,
+      ...bound,
       ...target,
       ...guard,
     };
@@ -281,6 +299,7 @@ export function compileRelationOp(decl: RelationDecl, resolveColumnType?: Column
     dialect,
     ...conn,
     sql,
+    ...bound,
     ...target,
     ...guard,
   };
@@ -337,7 +356,7 @@ function keyTypesOf(decl: RelationDecl, dialect: Dialect, targetKeys: readonly s
  * the text is fixed; the runtime re-binds the real deduped keys against the SAME text (the
  * single-JSON / `= ANY` forms are length-independent, so the text is stable).
  */
-function compiledBatchSql(decl: RelationDecl, dialect: Dialect, resolveColumnType?: ColumnTypeResolver): string {
+function compiledBatchSql(decl: RelationDecl, dialect: Dialect, resolveColumnType?: ColumnTypeResolver): { sql: string; conditionParams: unknown[] } {
   // A COMPOSITE decl compiles to the STATIC composite form — ONE JSON array-of-tuples param on every
   // dialect, length-independent, so the text is fixed. A per-parent `limit` selects the STATIC
   // composite-LIMITED builder (PG LATERAL / MySQL·SQLite ROW_NUMBER window over the SAME static
@@ -351,12 +370,13 @@ function compiledBatchSql(decl: RelationDecl, dialect: Dialect, resolveColumnTyp
       order: decl.order,
       targetKeys,
       keyTypes: keyTypesOf(decl, dialect, targetKeys, resolveColumnType),
+      ...(decl.conditions !== undefined ? { conditions: decl.conditions } : {}),
     };
     const node =
       decl.limit !== undefined
         ? compileCompositeKeyStaticLimited({ ...compositeBase, limit: decl.limit })
         : compileCompositeKeyStaticUnlimited(compositeBase);
-    return assembleMakeSQL(node).sql;
+    return keySetFirst(decl, dialect, assembleMakeSQL(node));
   }
   // A one-element placeholder key set fixes the SQL text (single-JSON-param / `= ANY` forms are
   // value-length-independent). The concrete keys are bound at execute time.
@@ -377,6 +397,7 @@ function compiledBatchSql(decl: RelationDecl, dialect: Dialect, resolveColumnTyp
     order: decl.order,
     targetKey: decl.targetKey as string,
     values: placeholderKeys,
+    ...(decl.conditions !== undefined ? { conditions: decl.conditions } : {}),
     ...(keyType !== undefined ? { keyType } : {}),
     ...(pgKeyCast !== undefined
       ? { sqlCastMap: new Map([[decl.targetKey as string, pgKeyCast]]) }
@@ -386,8 +407,28 @@ function compiledBatchSql(decl: RelationDecl, dialect: Dialect, resolveColumnTyp
     decl.limit !== undefined
       ? compileSingleKeyLimited({ ...base, limit: decl.limit })
       : compileSingleKeyUnlimited(base);
-  // The builder emits the SQL with ONE `?` (the whole key array). Assemble to the flat text.
-  return assembleMakeSQL(node).sql;
+  // The builder emits the SQL with ONE `?` for the whole key array, then the conditions' own `?`s.
+  return keySetFirst(decl, dialect, assembleMakeSQL(node));
+}
+
+/**
+ * Split an assembled batch into its text and the bound values that FOLLOW the key set. Every relation
+ * builder binds the key set FIRST (`compile-relation`), so the first param is the placeholder key set and
+ * the rest are exactly the values the relation's conditions bind on their own ({@link compileWhere}), in
+ * the same order. A batch that binds anything else is a builder defect and fails HERE, at compile, rather
+ * than binding a constant onto the key slot at run time.
+ */
+function keySetFirst(
+  decl: RelationDecl,
+  dialect: Dialect,
+  assembled: { sql: string; params: unknown[] },
+): { sql: string; conditionParams: unknown[] } {
+  const own = decl.conditions === undefined ? [] : compileWhere(decl.conditions, dialect).params;
+  const rest = assembled.params.slice(1);
+  if (assembled.params.length !== 1 + own.length || own.some((v, i) => !Object.is(v, rest[i]))) {
+    throw new Error(`relation '${decl.name}': the batch does not bind the key set first and then its conditions' values`);
+  }
+  return { sql: assembled.sql, conditionParams: rest };
 }
 
 // ── Batch execution (the SINGLE code path both read surfaces share) ────────────
@@ -513,7 +554,7 @@ export function runRelationOp(
   // column read back as two different JS types depending on which surface fetched it: `1n` through
   // codegen, `1` through the lazy path. Exactness is not a per-endpoint choice; the DECLARED type
   // decides the consumer-facing shape, and that narrowing is `materializeCell`'s job below.
-  const boundParams = bindKeys(op, keys);
+  const boundParams = [...bindKeys(op, keys), ...(op.conditionParams ?? [])];
   // The batch's own DATABASE: the compiled op names it ({@link RelationOp.connection} — the TARGET
   // model's), and the ctx owns the registry that resolves the name. They meet HERE, on the
   // {@link import('./exec-context').StatementIntent} — the only input `connectionFor` routes on, and

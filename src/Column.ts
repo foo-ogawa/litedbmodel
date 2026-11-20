@@ -21,6 +21,7 @@
 import { DBNotNullValue, dbTupleIn, DBCast, DBCastArray, DBToken } from './DBValues';
 import { type SqlFragment, type SqlTypedFragment, type SqlCondition, isSqlTypedFragment, isAnySqlFragment } from './SqlFragment';
 import type { DriverTypeCast } from './drivers/types';
+import { putCondition, type ConditionObject, type ConditionValue } from './DBConditions';
 
 // ============================================
 // OrderColumn Class (Type-safe ORDER BY)
@@ -969,7 +970,9 @@ export function serializeCondValue(col: Column<any, any>, value: unknown, typeCa
  * Convert a single condition to key-value pair.
  * Returns null if the condition should be skipped.
  */
-function condToKeyValue(cond: Cond, typeCast?: DriverTypeCast): [string, unknown] | null {
+function condToKeyValue(cond: Cond, typeCast?: DriverTypeCast, qualifier?: string): [string, unknown] | null {
+  // A column key names the column through `qualifier` when the statement aliases its table.
+  const nameOf = (c: Column<any, any>): string => (qualifier === undefined ? c.columnName : `${qualifier}.${c.columnName}`);
   if (cond.length === 1) {
     // No value condition like [${User.deleted_at} IS NULL]
     return [cond[0] as string, true]; // Use true as placeholder for DBConditions
@@ -984,7 +987,7 @@ function condToKeyValue(cond: Cond, typeCast?: DriverTypeCast): [string, unknown
   if (Array.isArray(keyOrCol)) {
     const columns = keyOrCol as Column<any, any>[];
     const tuples = (value as unknown[][]).map(t => t.map((v, i) => serializeCondValue(columns[i], v, typeCast)));
-    const columnNames = columns.map(col => col.columnName);
+    const columnNames = columns.map(nameOf);
     return ['__tuple__', dbTupleIn(columnNames, tuples)];
   }
 
@@ -1003,19 +1006,19 @@ function condToKeyValue(cond: Cond, typeCast?: DriverTypeCast): [string, unknown
   
   // Don't wrap if value is already a DBToken (e.g., dbIn, dbNull, DBCast, etc.)
   if (value instanceof DBToken) {
-    return [col.columnName, value];
+    return [nameOf(col), value];
   }
   const bound = serializeCondValue(col, value, typeCast);
   
   if (sqlCast) {
     // Wrap value with DBCast/DBCastArray for type casting
     if (Array.isArray(bound)) {
-      return [col.columnName, new DBCastArray(bound, sqlCast)];
+      return [nameOf(col), new DBCastArray(bound, sqlCast)];
     }
-    return [col.columnName, new DBCast(bound, sqlCast, '=')];
+    return [nameOf(col), new DBCast(bound, sqlCast, '=')];
   }
   
-  return [col.columnName, bound];
+  return [nameOf(col), bound];
 }
 
 /**
@@ -1043,30 +1046,33 @@ function sqlFragmentToKeyValue(
 
 export function condsToRecord(
   conditions: Conds,
-  typeCast?: DriverTypeCast
+  typeCast?: DriverTypeCast,
+  qualifier?: string
 ): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  
+  // Every element is one more AND member: `putCondition` keeps a repeated key (a second `or()`, the same
+  // column twice, two `exists()`) instead of letting it replace the first.
+  const result: ConditionObject = {};
+
   for (const cond of conditions) {
     // Skip SKIP elements
     if (cond === SKIP) {
       continue;
     }
     if (isOrCond(cond)) {
-      const orGroups = cond.conditions.map(group => condsToRecord(group as Conds, typeCast));
-      result['__or__'] = orGroups;
+      const orGroups = cond.conditions.map(group => condsToRecord(group as Conds, typeCast, qualifier));
+      putCondition(result, '__or__', orGroups as ConditionValue);
     } else if (isAnySqlFragment(cond)) {
       // Direct SqlCondition / SqlFragment / SqlTypedFragment as condition element
       const kv = sqlFragmentToKeyValue(cond);
       if (kv !== null) {
         const [key, value] = kv;
-        result[key] = value;
+        putCondition(result, key, value as ConditionValue);
       }
     } else {
-      const kv = condToKeyValue(cond as Cond, typeCast);
+      const kv = condToKeyValue(cond as Cond, typeCast, qualifier);
       if (kv === null) continue;
       const [key, value] = kv;
-      result[key] = value;
+      putCondition(result, key, value as ConditionValue);
     }
   }
   return result;
