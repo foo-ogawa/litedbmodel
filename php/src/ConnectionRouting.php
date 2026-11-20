@@ -1301,7 +1301,18 @@ function routedTransaction(
         $connection,
     );
 
-    $result = transaction($txCtx, $fn, $opts, $dialectName);
+    // The tx's connection is CHECKED OUT of the writer pool, as every routed statement's is
+    // ({@see RoutedConnection}): `acquire()` applies the config's session statements (queryTimeout /
+    // searchPath / charset) on the `\PDO` the tx then BEGINs on, and `release()` resets them after it —
+    // DESTROYED (reset skipped) when the tx failed, the same rule a failed routed statement follows.
+    $conn = $writerPool->acquire();
+    try {
+        $result = transaction($txCtx, $fn, $opts, $dialectName);
+    } catch (\Throwable $e) {
+        $writerPool->release($conn, true);
+        throw $e;
+    }
+    $writerPool->release($conn, false);
     // C1 writer-sticky: a COMMITTED tx arms the sticky clock (a rollbackOnly dry-run committed nothing),
     // unless this tx opted out per-transaction (#134 — `useWriterAfterTransaction: false`). The GLOBAL
     // setting still wins the other way: mark() is a no-op on a clock the deployment disabled.

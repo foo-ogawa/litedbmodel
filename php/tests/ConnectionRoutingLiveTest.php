@@ -390,10 +390,11 @@ final class ConnectionRoutingLiveTest extends TestCase
 
         // The in-tx write+read see the uncommitted row on the SAME connection (tx isolation) ⇒ the pin won.
         $this->assertSame('tx', $seen, 'the in-tx read sees the uncommitted write ⇒ same pinned connection');
-        // NO routed acquire inside the tx: the tx-pin (STEP 1) is resolved first in connectionFor, so
-        // NEITHER the in-tx write NOR the untagged read went through the routing pool's acquire() — the whole
-        // named-DB tx ran on ONE pinned writer connection (Phase B ownership preserved).
-        $this->assertSame($countBeforeTx, count($log), 'the tx-pin serves every in-body statement of this db — no routed acquire per in-tx statement');
+        // ONE acquire — the tx's own checkout of its connection from the writer pool (which applies the
+        // pool's session config) — and NO routed acquire per in-tx statement: the tx-pin (STEP 1) is
+        // resolved first in connectionFor, so NEITHER the in-tx write NOR the untagged read went through the
+        // routing pool's acquire() — the whole named-DB tx ran on ONE pinned writer connection.
+        $this->assertSame($countBeforeTx + 1, count($log), 'the tx checks its connection out once; the tx-pin serves every in-body statement of this db');
         // And the row committed (a real named-DB tx on the B connection).
         $committed = execute($ctx, 'SELECT val FROM ' . self::TBL . ' WHERE id=?', [1], new StatementIntent(write: false));
         $this->assertSame('tx', $committed[0]->val, 'the named-DB tx committed on the B connection');
@@ -516,6 +517,42 @@ final class ConnectionRoutingLiveTest extends TestCase
             $redThrew = true;
         }
         $this->assertTrue($redThrew, 'RED: without the search_path config the unqualified table is unresolved ⇒ config load-bearing');
+
+        $db->exec('DROP TABLE IF EXISTS ' . self::PG_SCHEMA . '.only_here');
+    }
+
+    public function testSessionConfigAppliedInsideRoutedTransactionOnPg(): void
+    {
+        $db = $this->connectOrFail([self::class, 'pg'], 'postgres');
+        $db->exec('CREATE SCHEMA IF NOT EXISTS ' . self::PG_SCHEMA);
+        $db->exec('DROP TABLE IF EXISTS ' . self::PG_SCHEMA . '.only_here');
+        $db->exec('CREATE TABLE ' . self::PG_SCHEMA . '.only_here (id INTEGER PRIMARY KEY)');
+        $db->exec('INSERT INTO ' . self::PG_SCHEMA . '.only_here (id) VALUES (7) ON CONFLICT DO NOTHING');
+
+        // The writer pool's session config: search_path = the php schema, statement_timeout = 250ms.
+        $cfg = resolveConnectionConfig(new ConnectionConfig(driver: 'postgres', searchPath: self::PG_SCHEMA . ',public', queryTimeout: 250));
+        $shared = new PdoDriver(self::pg());
+        $ctx = new RoutingExecutionContext($shared, new \LiteDbModel\Runtime\MiddlewareChain(), new RoutingConfig(
+            ConnectionRegistry::singleDefault(new ConfiguredPdoPool($shared, $cfg)),
+            new WriterStickyClock(useWriterAfterTransaction: false),
+        ));
+
+        // Inside a routed transaction the statements run under the SAME session config as outside one.
+        $seen = routedTransaction($ctx, function () use ($ctx) {
+            $rows = execute($ctx, 'SELECT id FROM only_here', [], new StatementIntent(write: false));
+            $timeout = execute($ctx, 'SHOW statement_timeout', [], new StatementIntent(write: false));
+            return [(int) $rows[0]->id, $timeout[0]->statement_timeout];
+        }, new \LiteDbModel\Runtime\TransactionOptions(retryOnError: false), 'postgres');
+        $this->assertSame([7, '250ms'], $seen, 'search_path and statement_timeout apply inside the routed transaction');
+
+        // And the tx's release reset them, as a routed statement's release does (no leak to the \PDO).
+        $noLeak = false;
+        try {
+            $shared->pdo()->query('SELECT id FROM only_here');
+        } catch (\Throwable) {
+            $noLeak = true;
+        }
+        $this->assertTrue($noLeak, 'the session config was RESET when the transaction released its connection');
 
         $db->exec('DROP TABLE IF EXISTS ' . self::PG_SCHEMA . '.only_here');
     }
