@@ -120,7 +120,7 @@ func WireListOf(items []WireValue) WireValue { return WireValue{kind: wireList, 
 func WireRowOfFields(fields []WireField) WireRow { return WireRow{entries: fields} }
 
 // IsNull — is this the wire null value? A batched/fanout transport returns a WireList of aligned results; a
-// DANGLING fanout id is a WireNull element the covered runner detects here (drop:dangling) before de-box.
+// DANGLING fanout id is a WireNull element (the covered runner classifies it with the row probe).
 func (w WireValue) IsNull() bool { return w.kind == wireNull }
 
 func (w *WireValue) wireTag() string {
