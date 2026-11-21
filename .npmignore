@@ -1,5 +1,4 @@
-# Source files (dist is published)
-src/
+# Tests and benchmarks (dist and src are published)
 test/
 benchmark/
 

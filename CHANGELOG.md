@@ -5,6 +5,25 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.3.2] - 2026-11-21
+
+**npm の利用者が `litedbmodel/scp` の `Db` を呼ぶ behavior から生成できるようにし、behavior-contracts を 1 つの版に固定した。**
+
+### Fixed
+
+- npm の litedbmodel を導入した利用者が、`litedbmodel/scp` の `Db` を呼ぶ `@behavior` のメソッド（`emitBehaviorModule` の
+  出力と同じ形）から `bc generate --from` を実行すると、`'Db' is not a statically resolvable binding` で失敗していた。
+  `@leaf` はデコレーターで、宣言ファイル（`dist/scp/index.d.ts`）には残らないため、bc が `Db` を leaf のクラスと識別
+  できなかった。`exports` の `./scp` に export の条件 `behavior-contracts-source`（`./src/scp/index.ts`）を置き、`files` に
+  `src` を加えた。bc は 0.13.1 からこの条件でソースを読む。利用者の `tsc` と Node.js の実行は、従来どおり `dist` を使う（#401）。
+- `dependencies` の behavior-contracts を、範囲（`^0.12.0`）ではなく `0.13.1` に固定した。範囲では、利用者が範囲内の
+  新しい版の生成器を受け取り、各言語のランタイムと呼び出しの形が合わない生成物が出る可能性があった。また、利用者の
+  木に behavior-contracts が 2 つ導入されると、bc が `Db` を識別できない（#401）。
+
+### Changed
+
+- behavior-contracts を 0.13.1 に統一した（npm `0.13.1`・`go/go.mod` の `require` `v0.13.1`・Rust `0.13.1`）。
+
 ## [2.3.1] - 2026-11-20
 
 **条件の組み立て・値の埋め込み・接続の設定・公開の workflow の欠陥を修正した。**
