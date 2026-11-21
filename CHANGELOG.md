@@ -18,11 +18,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
   `src` を加えた。bc は 0.13.1 からこの条件でソースを読む。利用者の `tsc` と Node.js の実行は、従来どおり `dist` を使う（#401）。
 - `dependencies` の behavior-contracts を、範囲（`^0.12.0`）ではなく `0.13.1` に固定した。範囲では、利用者が範囲内の
   新しい版の生成器を受け取り、各言語のランタイムと呼び出しの形が合わない生成物が出る可能性があった。また、利用者の
-  木に behavior-contracts が 2 つ導入されると、bc が `Db` を識別できない（#401）。
+  木に behavior-contracts が 2 つ導入されると、bc が `Db` を識別できない。利用者が behavior-contracts を自身の
+  `dependencies` に置く場合は、範囲ではなく同じ版（`0.13.1`）に固定する（#401）。
 
 ### Changed
 
-- behavior-contracts を 0.13.1 に統一した（npm `0.13.1`・`go/go.mod` の `require` `v0.13.1`・Rust `0.13.1`）。
+- behavior-contracts を 0.13.1 に統一した（npm `0.13.1`・`go/go.mod` の `require` `v0.13.1`・Rust `0.13.1`）。bc 0.13.1 で生成物を再生成した（差分は
+  `go/litedbmodel_runtime/wire/wire.go` のコメントの 1 行）。
+- `.npmignore` の `src/`・`docs/` の行を削除した（`files` が優先されるため効果は無く、公開の内容と記載が食い違っていた）。
 
 ## [2.3.1] - 2026-11-20
 
